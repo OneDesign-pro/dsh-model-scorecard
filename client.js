@@ -24,31 +24,68 @@ window.__ModuleLoader__.load({
     const DEFAULT_QUERY = { sort: 'ttft', view: 'model' }
 
     // --- formatting helpers ------------------------------------------------------
+    // The panel's copy is Russian, so its numbers and its times follow the same
+    // language rather than the browser's: a Russian sentence quoting "45.2"
+    // reads worse than a consistent one. A full translation pass would move
+    // LOCALE — and this comment — along with the strings.
+    const LOCALE = 'ru'
+
     const dash = '-'
+    /** Between a number and its unit: "820 ms" must not wrap into two lines. */
+    const NBSP = '\u00A0'
+
+    // Intl formatters are expensive to build, so one instance per precision.
+    const numberFormats = new Map()
+
+    function decimalFormat(digits) {
+      let format = numberFormats.get(digits)
+      if (format === undefined) {
+        format = new Intl.NumberFormat(LOCALE, {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        })
+        numberFormats.set(digits, format)
+      }
+      return format
+    }
+
+    function finite(value) {
+      return value !== null && value !== undefined && Number.isFinite(value)
+    }
 
     function num(value, digits) {
-      if (value === null || value === undefined || !Number.isFinite(value)) return dash
-      return value.toFixed(digits)
+      if (!finite(value)) return dash
+      return decimalFormat(digits).format(value)
+    }
+
+    /** Counts are grouped, never fractional: 12 345 steps, not 12345 or 12.3 k. */
+    function count(value) {
+      if (!finite(value)) return dash
+      return decimalFormat(0).format(value)
     }
 
     function ms(value) {
-      if (value === null || value === undefined || !Number.isFinite(value)) return dash
-      if (value < 1000) return `${Math.round(value)} ms`
-      return `${(value / 1000).toFixed(1)} s`
+      if (!finite(value)) return dash
+      if (value < 1000) return `${decimalFormat(0).format(Math.round(value))}${NBSP}ms`
+      return `${decimalFormat(1).format(value / 1000)}${NBSP}s`
     }
 
     function pct(value) {
-      if (value === null || value === undefined || !Number.isFinite(value)) return dash
-      return `${(value * 100).toFixed(1)}%`
+      if (!finite(value)) return dash
+      return `${decimalFormat(1).format(value * 100)}%`
     }
+
+    // Relative time through Intl: numeric:'auto' yields "сейчас" for a snapshot
+    // taken moments ago and the correct Russian plural everywhere else.
+    const relativeFormat = new Intl.RelativeTimeFormat(LOCALE, { numeric: 'auto' })
 
     function ago(ts) {
       if (!Number.isFinite(ts)) return dash
       const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000))
-      if (seconds < 60) return `${seconds} с назад`
-      if (seconds < 3600) return `${Math.round(seconds / 60)} мин назад`
-      if (seconds < 86400) return `${Math.round(seconds / 3600)} ч назад`
-      return `${Math.round(seconds / 86400)} дн назад`
+      if (seconds < 60) return relativeFormat.format(-seconds, 'second')
+      if (seconds < 3600) return relativeFormat.format(-Math.round(seconds / 60), 'minute')
+      if (seconds < 86400) return relativeFormat.format(-Math.round(seconds / 3600), 'hour')
+      return relativeFormat.format(-Math.round(seconds / 86400), 'day')
     }
 
     // Local model ids are filesystem paths, e.g.
@@ -191,7 +228,7 @@ window.__ModuleLoader__.load({
               : null,
           ),
       },
-      { key: 'steps', tier: 'core', base: 'num', label: 'шагов', cell: (row) => String(row.steps ?? dash) },
+      { key: 'steps', tier: 'core', base: 'num', label: 'шагов', cell: (row) => count(row.steps) },
       {
         key: 'ttft',
         tier: 'core',
@@ -212,7 +249,7 @@ window.__ModuleLoader__.load({
         key: 'errors',
         tier: 'core',
         label: 'ош.',
-        cell: (row) => String(row.errors ?? 0),
+        cell: (row) => count(row.errors ?? 0),
         tone: (row) => (row.errors > 0 ? 'dsh-ms-bad' : null),
       },
       { key: 'ttftP90', tier: 'extra', label: 'отклик p90', cell: (row) => ms(row.ttftP90) },
@@ -221,7 +258,7 @@ window.__ModuleLoader__.load({
         key: 'confidence',
         tier: 'extra',
         label: 'замер',
-        cell: (row) => (row.speedConfidence === null ? dash : `${Math.round(row.speedConfidence * 100)}%`),
+        cell: (row) => (row.speedConfidence === null ? dash : `${count(Math.round(row.speedConfidence * 100))}%`),
         tone: (row) => (row.speedConfidence !== null && row.speedConfidence < 0.5 ? 'dsh-ms-warn' : null),
       },
       { key: 'llm', tier: 'extra', label: 'llm / шаг', cell: (row) => ms(row.llmMeanMs) },
@@ -244,12 +281,12 @@ window.__ModuleLoader__.load({
      * fold is stale and how much of it is still being refreshed.
      */
     function footerSummary(data, totals, pending) {
-      const parts = [`сессий в отчёте: ${data.scanned}`]
-      if (data.skipped) parts.push(`пропущено: ${data.skipped}`)
-      if (totals) parts.push(`шагов: ${totals.steps}`, `моделей: ${totals.models}`)
-      if (data.readNow > 0) parts.push(`прочитано сейчас: ${data.readNow}`)
-      if (data.reused > 0) parts.push(`из кэша: ${data.reused}`)
-      if (pending > 0) parts.push(`обновляю ещё ${pending}`)
+      const parts = [`сессий в отчёте: ${count(data.scanned)}`]
+      if (data.skipped) parts.push(`пропущено: ${count(data.skipped)}`)
+      if (totals) parts.push(`шагов: ${count(totals.steps)}`, `моделей: ${count(totals.models)}`)
+      if (data.readNow > 0) parts.push(`прочитано сейчас: ${count(data.readNow)}`)
+      if (data.reused > 0) parts.push(`из кэша: ${count(data.reused)}`)
+      if (pending > 0) parts.push(`обновляю ещё ${count(pending)}`)
       if (Number.isFinite(data.snapshotAt)) parts.push(`снимок ${ago(data.snapshotAt)}`)
       return parts.join(' · ')
     }
@@ -275,7 +312,7 @@ window.__ModuleLoader__.load({
 .dsh-ms-btn[disabled] { opacity:.55; cursor:default; }
 .dsh-ms-wrap { overflow-x:auto; border:1px solid var(--dsw-alias-border-l1); border-radius:8px;
   background:var(--dsw-alias-bg-layer-1); }
-.dsh-ms-table { border-collapse:collapse; width:100%; font-size:12px; }
+.dsh-ms-table { border-collapse:collapse; width:100%; font-size:12px; font-variant-numeric:tabular-nums; }
 .dsh-ms-table th, .dsh-ms-table td { padding:6px 10px; text-align:right; white-space:nowrap;
   border-bottom:1px solid var(--dsw-alias-border-l1); }
 .dsh-ms-table .dsh-ms-left { text-align:left; }
@@ -576,7 +613,7 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'dsh-ms-empty' },
           pending > 0
-            ? `Прочитано ${state.data.scanned} сессий, ещё ${pending} в очереди — данные появятся по мере обработки.`
+            ? `Прочитано ${count(state.data.scanned)} сессий, ещё ${count(pending)} в очереди — данные появятся по мере обработки.`
             : 'В истории пока нет замеров. Поработайте в сессии — метрики считаются по уже записанным логам.',
         )
       } else {
