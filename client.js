@@ -315,12 +315,21 @@ window.__ModuleLoader__.load({
 .dsh-ms-chip:hover { border-color:var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); }
 .dsh-ms-chip[aria-pressed="true"] { border-color:var(--dsw-alias-brand-primary);
   color:var(--dsw-alias-brand-primary); }
-.dsh-ms-btn { font:inherit; font-size:12px; padding:4px 11px; border-radius:6px; cursor:pointer;
+.dsh-ms-btn { display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  min-width:118px; font:inherit; font-size:12px; padding:4px 11px; border-radius:6px; cursor:pointer;
   touch-action:manipulation;
   border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-2);
   color:var(--dsw-alias-label-primary); }
 .dsh-ms-btn:hover { border-color:var(--dsw-alias-border-l2); }
-.dsh-ms-btn[disabled] { opacity:.55; cursor:default; }
+/* Not the disabled attribute: the button keeps focus and its tab stop. */
+.dsh-ms-btn[aria-disabled="true"] { opacity:.6; cursor:default; }
+/* Feedback for a request in flight. Under reduced motion it keeps turning, just
+   slowly: a frozen ring reads as a stuck panel, and this is the only signal
+   that the panel is doing something. */
+.dsh-ms-spin { width:10px; height:10px; border-radius:50%; border:2px solid var(--dsw-alias-border-l2);
+  border-top-color:var(--dsw-alias-brand-primary); animation:dsh-ms-turn .7s linear infinite; }
+@keyframes dsh-ms-turn { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dsh-ms-spin { animation-duration:2.5s; } }
 /* The host theme has no focus token for these controls, so draw the ring
    explicitly. An outline rather than a shadow: the table wrapper clips. */
 .dsh-ms-chip:focus-visible, .dsh-ms-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary);
@@ -620,6 +629,11 @@ window.__ModuleLoader__.load({
 
       const totals = state.data?.totals
       const pending = state.data?.pending ?? 0
+      // A real `disabled` takes the button out of the tab order and drops the
+      // focus of whoever just pressed it. The busy state is expressed with
+      // aria-disabled plus a guarded handler instead, so the control stays
+      // focusable and the keyboard user keeps their place.
+      const refreshing = state.phase === 'loading' || state.phase === 'refreshing'
       const footer = h(
         'div',
         { className: 'dsh-ms-foot' },
@@ -634,12 +648,14 @@ window.__ModuleLoader__.load({
           {
             type: 'button',
             className: 'dsh-ms-btn',
-            disabled: state.phase === 'loading' || state.phase === 'refreshing',
+            'aria-disabled': refreshing,
             onClick: () => {
+              if (refreshing) return
               manualRef.current = true
               load()
             },
           },
+          refreshing ? h('span', { className: 'dsh-ms-spin', 'aria-hidden': 'true' }) : null,
           state.phase === 'refreshing' ? 'обновляю…' : 'Обновить',
         ),
       )
