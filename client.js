@@ -95,10 +95,12 @@ window.__ModuleLoader__.load({
     // agent's text report, which is unchanged).
     const MAX_LABEL = 44
 
-    // A cold panel request is capped on the host and then reports what is still
-    // pending instead of blocking, so this timeout only fires when the host is
-    // genuinely unresponsive.
-    const REQUEST_TIMEOUT_MS = 25000
+    // A request can legitimately take about a minute: the host folds session
+    // logs, and on a large history a single call has been measured at 47-56 s.
+    // The budget therefore has to sit above that, or the panel aborts a request
+    // the host is still working on and reports an error for a panel that would
+    // have answered. The loading copy and this number describe one thing.
+    const REQUEST_TIMEOUT_MS = 120000
 
     // The last successful answer is kept in the browser so opening the panel
     // shows the table at once instead of a spinner, then refreshes behind it.
@@ -641,7 +643,7 @@ window.__ModuleLoader__.load({
         content = h(
           'div',
           { className: 'dsh-ms-empty' },
-          'Считаю статистику по истории сессий… Первый в этой установке проход читает все логи сессий и может занять до минуты. Дальше ответ берётся из кэша сразу, а свежие данные догружаются в фоне.',
+          'Считаю статистику по истории сессий… Первый в этой установке проход читает все логи сессий и может занять до минуты-двух. Дальше ответ берётся из кэша сразу, а свежие данные догружаются в фоне.',
         )
       } else if (rows.length === 0) {
         content = h(
