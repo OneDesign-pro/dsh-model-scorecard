@@ -57,6 +57,16 @@ Settings language switcher (and any language pack) applies to it, including the
 section label and the number and date formats. On a host without the `locale`
 client service the panel falls back to its built-in Russian copy.
 
+The plugin's own row in the plugin list gets its name and summary the same way,
+but from files rather than from the running client: the Host reads
+`locale/<language>.json` (`{ "meta": { "title": …, "description": … } }`) through
+the module resolver, which is why `package.json` has to export
+`./locale/*.json`. With no dictionary the Host falls back to the package name and
+its `description` field, so an English `locale/en.json` is what gives those two
+fields a human name at all — a `meta` object in `package.json` is not part of the
+package manifest and nothing reads it. Like every other host-side change here,
+this one appears in the plugin list only after DSH restarts.
+
 The panel has no URL of its own: the settings dialog is an overlay that does not
 put the open section into the address bar, so its state lives in `localStorage`
 (`dsh-model-stats:prefs:v1`) rather than in a query parameter. A deep link would

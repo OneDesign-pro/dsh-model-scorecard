@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Model Stats",
+    "description": "Historical per-model and per-provider analytics folded from session history: response time, tok/s, errors, stability."
+  }
+}

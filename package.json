@@ -8,11 +8,8 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
-  },
-  "meta": {
-    "title": "Model Stats",
-    "description": "Историческая аналитика по моделям и провайдерам: TTFT, tok/s, ошибки, стабильность."
   },
   "dsh": {
     "bundle": {
@@ -32,6 +29,7 @@
     "tools/",
     "client.js",
     "cordis.patch.yml",
+    "locale/",
     "README.md",
     "COMPARISON.md",
     "package.json"
