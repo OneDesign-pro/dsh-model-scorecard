@@ -14,78 +14,255 @@ window.__ModuleLoader__.load({
     const h = React.createElement
 
     const SORTS = [
-      { key: 'steps', label: 'по числу шагов' },
-      { key: 'ttft', label: 'быстрый отклик' },
-      { key: 'speed', label: 'скорость' },
-      { key: 'errors', label: 'нестабильные' },
-      { key: 'lastSeen', label: 'недавние' },
+      { key: 'steps', labelKey: 'sort.steps' },
+      { key: 'ttft', labelKey: 'sort.ttft' },
+      { key: 'speed', labelKey: 'sort.speed' },
+      { key: 'errors', labelKey: 'sort.errors' },
+      { key: 'lastSeen', labelKey: 'sort.lastSeen' },
     ]
 
     const DEFAULT_QUERY = { sort: 'ttft', view: 'model' }
 
-    // --- formatting helpers ------------------------------------------------------
-    // The panel's copy is Russian, so its numbers and its times follow the same
-    // language rather than the browser's: a Russian sentence quoting "45.2"
-    // reads worse than a consistent one. A full translation pass would move
-    // LOCALE — and this comment — along with the strings.
-    const LOCALE = 'ru'
+    // --- localized copy ----------------------------------------------------------
+    // The panel follows the host's locale service: its dictionaries are registered
+    // under this package's namespace and read back through a bound translate
+    // function, so the panel switches language together with the rest of the GUI,
+    // and a language pack can override any key. Without that service — an older
+    // host — the built-in Russian copy below keeps the panel complete.
+    const I18N_NS = 'dsh-model-stats'
+    const FALLBACK_LOCALE = 'ru'
 
+    const MESSAGES = {
+      ru: {
+        'section.label': 'Скорость моделей',
+        'panel.title': 'Скорость и стабильность моделей',
+        'panel.subtitle':
+          'Считается по истории сессий. Отклик — время до первого токена, tok/s — по спану стриминга провайдера.',
+        'sort.caption': 'Сортировка:',
+        'sort.group': 'Сортировка',
+        'sort.steps': 'по числу шагов',
+        'sort.ttft': 'быстрый отклик',
+        'sort.speed': 'скорость',
+        'sort.errors': 'нестабильные',
+        'sort.lastSeen': 'недавние',
+        'view.models': 'по моделям',
+        'view.providers': 'по провайдерам',
+        'columns.all': 'все метрики',
+        'column.model': 'Модель',
+        'column.provider': 'Провайдер',
+        'column.steps': 'шагов',
+        'column.ttft': 'отклик med',
+        'column.tps': 'tok/s med',
+        'column.errors': 'ош.',
+        'column.ttftP90': 'отклик p90',
+        'column.tpsMax': 'tok/s max',
+        'column.confidence': 'замер',
+        'column.llm': 'llm / шаг',
+        'column.cache': 'кэш',
+        'column.lastSeen': 'виден',
+        'action.refresh': 'Обновить',
+        'action.refreshing': 'обновляю…',
+        'loading.body':
+          'Считаю статистику по истории сессий… Первый в этой установке проход читает все логи сессий и может занять до минуты. Дальше ответ берётся из кэша сразу, а свежие данные догружаются в фоне.',
+        'empty.pending':
+          'Прочитано {scanned} сессий, ещё {pending} в очереди — данные появятся по мере обработки.',
+        'empty.nodata':
+          'В истории пока нет замеров. Поработайте в сессии — метрики считаются по уже записанным логам.',
+        'error.body':
+          'Не удалось получить статистику: {error}. Нажмите «Обновить», чтобы повторить.',
+        'warn.body':
+          'Не удалось обновить данные: {warning}. Показаны последние полученные значения — нажмите «Обновить», чтобы повторить.',
+        'timeout.reason': 'превышено время ожидания ответа ({seconds} с)',
+        'announce.refreshing': 'Обновляю статистику…',
+        'announce.updated': 'Статистика обновлена',
+        'footer.scanned': 'сессий в отчёте: {count}',
+        'footer.skipped': 'пропущено: {count}',
+        'footer.steps': 'шагов: {count}',
+        'footer.models': 'моделей: {count}',
+        'footer.readNow': 'прочитано сейчас: {count}',
+        'footer.reused': 'из кэша: {count}',
+        'footer.pending': 'обновляю ещё {count}',
+        'footer.snapshot': 'снимок {ago}',
+        'note.core':
+          'Зелёным отмечены лучшая медиана отклика и лучшая медиана скорости среди показанных строк. Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. ',
+        'note.extra':
+          '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. «кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала.',
+        'note.collapsed':
+          'Отклик p90, tok/s max, «замер», llm / шаг, «кэш» и «виден» — за кнопкой «все метрики».',
+      },
+      en: {
+        'section.label': 'Model Speed',
+        'panel.title': 'Model speed and stability',
+        'panel.subtitle':
+          'Folded from session history. Response is the time to first token; tok/s is measured over the provider’s streaming span.',
+        'sort.caption': 'Sort:',
+        'sort.group': 'Sort',
+        'sort.steps': 'most steps',
+        'sort.ttft': 'fastest response',
+        'sort.speed': 'fastest decode',
+        'sort.errors': 'least stable',
+        'sort.lastSeen': 'most recent',
+        'view.models': 'by model',
+        'view.providers': 'by provider',
+        'columns.all': 'all metrics',
+        'column.model': 'Model',
+        'column.provider': 'Provider',
+        'column.steps': 'steps',
+        'column.ttft': 'response med',
+        'column.tps': 'tok/s med',
+        'column.errors': 'errors',
+        'column.ttftP90': 'response p90',
+        'column.tpsMax': 'tok/s max',
+        'column.confidence': 'meas.',
+        'column.llm': 'llm / step',
+        'column.cache': 'cache',
+        'column.lastSeen': 'seen',
+        'action.refresh': 'Refresh',
+        'action.refreshing': 'refreshing…',
+        'loading.body':
+          'Counting over session history… The first pass in this install reads every session log and can take up to a minute. After that the answer comes from the cache immediately and fresh data is loaded in the background.',
+        'empty.pending':
+          'Read {scanned} sessions, {pending} still queued — rows appear as they are processed.',
+        'empty.nodata':
+          'No measurements in the history yet. Work in a session — metrics are folded from logs that are already written.',
+        'error.body': 'Could not get the statistics: {error}. Press “Refresh” to retry.',
+        'warn.body':
+          'Could not refresh: {warning}. Showing the last values received — press “Refresh” to retry.',
+        'timeout.reason': 'the request timed out ({seconds} s)',
+        'announce.refreshing': 'Refreshing statistics…',
+        'announce.updated': 'Statistics updated',
+        'footer.scanned': 'sessions in report: {count}',
+        'footer.skipped': 'skipped: {count}',
+        'footer.steps': 'steps: {count}',
+        'footer.models': 'models: {count}',
+        'footer.readNow': 'read now: {count}',
+        'footer.reused': 'from cache: {count}',
+        'footer.pending': 'refreshing {count} more',
+        'footer.snapshot': 'snapshot {ago}',
+        'note.core':
+          'Green marks the best median response and the best median decode among the rows shown. A “-” means the provider recorded no stream timing for that model, not that the model is slow. ',
+        'note.extra':
+          '“meas.” is the share of steps whose span was long enough to be a reliable rate: a low value means the model mostly emitted very short bursts, so its tok/s is the least trustworthy number in the row. “cache” is the prompt-cache read share of input tokens. “seen” is when the model last answered.',
+        'note.collapsed':
+          'Response p90, tok/s max, “meas.”, llm / step, “cache” and “seen” — behind the “all metrics” button.',
+      },
+    }
+
+    /** `{name}` interpolation, the same dictionary format the host service uses. */
+    function interpolate(template, params) {
+      if (params === undefined) return template
+      return template.replace(/\{(\w+)\}/g, (match, name) =>
+        name in params ? String(params[name]) : match,
+      )
+    }
+
+    /** Translator used when the host has no locale service. */
+    function fallbackTranslate(key, params) {
+      return interpolate(MESSAGES[FALLBACK_LOCALE][key] ?? key, params)
+    }
+
+    /**
+     * Bind this package's copy to the host's locale service.
+     *
+     * Resolved lazily — on the first label or render, not at plugin apply — so
+     * the panel still finds the service when it is provided later in the boot
+     * sequence. Any failure keeps the built-in copy rather than keying the panel
+     * to raw dictionary ids.
+     */
+    function bindPanelLocale(ctx) {
+      const locale = typeof ctx.get === 'function' ? ctx.get('locale') : undefined
+      const usable =
+        locale !== undefined &&
+        typeof locale.register === 'function' &&
+        typeof locale.bind === 'function'
+      if (!usable) return { t: fallbackTranslate, locale: undefined }
+      const register = (tag, dict) => {
+        const call = () => locale.register(I18N_NS, tag, dict)
+        if (typeof ctx.effect === 'function') ctx.effect(call, `${I18N_NS}: ${tag}`)
+        else call()
+      }
+      try {
+        register('ru', MESSAGES.ru)
+        register('en', MESSAGES.en)
+        return { t: locale.bind(I18N_NS), locale }
+      } catch (error) {
+        return { t: fallbackTranslate, locale: undefined }
+      }
+    }
+
+    // --- formatting helpers ------------------------------------------------------
+    // Numbers and times follow the active language too, so a Russian sentence in
+    // the Russian UI says "45,2", not "45.2".
     const dash = '-'
     /** Between a number and its unit: "820 ms" must not wrap into two lines. */
     const NBSP = '\u00A0'
-
-    // Intl formatters are expensive to build, so one instance per precision.
-    const numberFormats = new Map()
-
-    function decimalFormat(digits) {
-      let format = numberFormats.get(digits)
-      if (format === undefined) {
-        format = new Intl.NumberFormat(LOCALE, {
-          minimumFractionDigits: digits,
-          maximumFractionDigits: digits,
-        })
-        numberFormats.set(digits, format)
-      }
-      return format
-    }
 
     function finite(value) {
       return value !== null && value !== undefined && Number.isFinite(value)
     }
 
-    function num(value, digits) {
-      if (!finite(value)) return dash
-      return decimalFormat(digits).format(value)
-    }
+    /** Intl formatters are expensive to build, so they are cached per language. */
+    const formatterBundles = new Map()
 
-    /** Counts are grouped, never fractional: 12 345 steps, not 12345 or 12.3 k. */
-    function count(value) {
-      if (!finite(value)) return dash
-      return decimalFormat(0).format(value)
-    }
+    function formattersFor(locale) {
+      const cached = formatterBundles.get(locale)
+      if (cached !== undefined) return cached
 
-    function ms(value) {
-      if (!finite(value)) return dash
-      if (value < 1000) return `${decimalFormat(0).format(Math.round(value))}${NBSP}ms`
-      return `${decimalFormat(1).format(value / 1000)}${NBSP}s`
-    }
+      // An unknown or malformed tag must not take the panel down with it.
+      let resolved = locale
+      try {
+        new Intl.NumberFormat(resolved)
+      } catch (error) {
+        resolved = FALLBACK_LOCALE
+      }
 
-    function pct(value) {
-      if (!finite(value)) return dash
-      return `${decimalFormat(1).format(value * 100)}%`
-    }
+      const decimals = new Map()
+      const decimalFormat = (digits) => {
+        let format = decimals.get(digits)
+        if (format === undefined) {
+          format = new Intl.NumberFormat(resolved, {
+            minimumFractionDigits: digits,
+            maximumFractionDigits: digits,
+          })
+          decimals.set(digits, format)
+        }
+        return format
+      }
 
-    // Relative time through Intl: numeric:'auto' yields "сейчас" for a snapshot
-    // taken moments ago and the correct Russian plural everywhere else.
-    const relativeFormat = new Intl.RelativeTimeFormat(LOCALE, { numeric: 'auto' })
+      const relative = new Intl.RelativeTimeFormat(resolved, { numeric: 'auto' })
 
-    function ago(ts) {
-      if (!Number.isFinite(ts)) return dash
-      const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000))
-      if (seconds < 60) return relativeFormat.format(-seconds, 'second')
-      if (seconds < 3600) return relativeFormat.format(-Math.round(seconds / 60), 'minute')
-      if (seconds < 86400) return relativeFormat.format(-Math.round(seconds / 3600), 'hour')
-      return relativeFormat.format(-Math.round(seconds / 86400), 'day')
+      const bundle = {
+        num(value, digits) {
+          if (!finite(value)) return dash
+          return decimalFormat(digits).format(value)
+        },
+        /** Counts are grouped, never fractional: 12 345 steps, not 12345. */
+        count(value) {
+          if (!finite(value)) return dash
+          return decimalFormat(0).format(value)
+        },
+        ms(value) {
+          if (!finite(value)) return dash
+          if (value < 1000) return `${decimalFormat(0).format(Math.round(value))}${NBSP}ms`
+          return `${decimalFormat(1).format(value / 1000)}${NBSP}s`
+        },
+        pct(value) {
+          if (!finite(value)) return dash
+          return `${decimalFormat(1).format(value * 100)}%`
+        },
+        // numeric:'auto' yields "сейчас" for a snapshot taken moments ago and the
+        // correct plural everywhere else, in every language Intl knows.
+        ago(ts) {
+          if (!Number.isFinite(ts)) return dash
+          const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000))
+          if (seconds < 60) return relative.format(-seconds, 'second')
+          if (seconds < 3600) return relative.format(-Math.round(seconds / 60), 'minute')
+          if (seconds < 86400) return relative.format(-Math.round(seconds / 3600), 'hour')
+          return relative.format(-Math.round(seconds / 86400), 'day')
+        },
+      }
+      formatterBundles.set(locale, bundle)
+      return bundle
     }
 
     // Local model ids are filesystem paths, e.g.
@@ -215,7 +392,7 @@ window.__ModuleLoader__.load({
       {
         key: 'name',
         align: 'left',
-        label: (view) => (view === 'model' ? 'Модель' : 'Провайдер'),
+        labelKey: (view) => (view === 'model' ? 'column.model' : 'column.provider'),
         cell: (row, ctx) => {
           const full = ctx.view === 'model' ? row.model : row.provider
           const short = ctx.view === 'model' ? shortLabel(row.model) : row.provider
@@ -236,44 +413,78 @@ window.__ModuleLoader__.load({
           )
         },
       },
-      { key: 'steps', tier: 'core', base: 'num', label: 'шагов', cell: (row) => count(row.steps) },
+      {
+        key: 'steps',
+        tier: 'core',
+        base: 'num',
+        labelKey: 'column.steps',
+        cell: (row, ctx) => ctx.fmt.count(row.steps),
+      },
       {
         key: 'ttft',
         tier: 'core',
         base: 'num',
-        label: 'отклик med',
-        cell: (row) => ms(row.ttftMedian),
+        labelKey: 'column.ttft',
+        cell: (row, ctx) => ctx.fmt.ms(row.ttftMedian),
         tone: (row, ctx) => (ctx.best.ttft === row ? 'dsh-ms-good' : null),
       },
       {
         key: 'tps',
         tier: 'core',
         base: 'num',
-        label: 'tok/s med',
-        cell: (row) => num(row.tpsMedian, 1),
+        labelKey: 'column.tps',
+        cell: (row, ctx) => ctx.fmt.num(row.tpsMedian, 1),
         tone: (row, ctx) => (ctx.best.tps === row ? 'dsh-ms-good' : null),
       },
       {
         key: 'errors',
         tier: 'core',
-        label: 'ош.',
-        cell: (row) => count(row.errors ?? 0),
+        labelKey: 'column.errors',
+        cell: (row, ctx) => ctx.fmt.count(row.errors ?? 0),
         tone: (row) => (row.errors > 0 ? 'dsh-ms-bad' : null),
       },
-      { key: 'ttftP90', tier: 'extra', label: 'отклик p90', cell: (row) => ms(row.ttftP90) },
-      { key: 'tpsMax', tier: 'extra', label: 'tok/s max', cell: (row) => num(row.tpsMax, 1) },
+      {
+        key: 'ttftP90',
+        tier: 'extra',
+        labelKey: 'column.ttftP90',
+        cell: (row, ctx) => ctx.fmt.ms(row.ttftP90),
+      },
+      {
+        key: 'tpsMax',
+        tier: 'extra',
+        labelKey: 'column.tpsMax',
+        cell: (row, ctx) => ctx.fmt.num(row.tpsMax, 1),
+      },
       {
         key: 'confidence',
         tier: 'extra',
-        label: 'замер',
-        cell: (row) => (row.speedConfidence === null ? dash : `${count(Math.round(row.speedConfidence * 100))}%`),
+        labelKey: 'column.confidence',
+        cell: (row, ctx) =>
+          row.speedConfidence === null
+            ? dash
+            : `${ctx.fmt.count(Math.round(row.speedConfidence * 100))}%`,
         tone: (row) => (row.speedConfidence !== null && row.speedConfidence < 0.5 ? 'dsh-ms-warn' : null),
       },
-      { key: 'llm', tier: 'extra', label: 'llm / шаг', cell: (row) => ms(row.llmMeanMs) },
-      { key: 'cache', tier: 'extra', label: 'кэш', cell: (row) => pct(row.cacheHitRate) },
+      {
+        key: 'llm',
+        tier: 'extra',
+        labelKey: 'column.llm',
+        cell: (row, ctx) => ctx.fmt.ms(row.llmMeanMs),
+      },
+      {
+        key: 'cache',
+        tier: 'extra',
+        labelKey: 'column.cache',
+        cell: (row, ctx) => ctx.fmt.pct(row.cacheHitRate),
+      },
       // The panel can sort by recency, so the timestamp it sorts by is a column
       // of its own instead of an invisible key.
-      { key: 'lastSeen', tier: 'extra', label: 'виден', cell: (row) => ago(row.lastSeen) },
+      {
+        key: 'lastSeen',
+        tier: 'extra',
+        labelKey: 'column.lastSeen',
+        cell: (row, ctx) => ctx.fmt.ago(row.lastSeen),
+      },
     ]
 
     /** An ordinary cell is dimmed unless its column's tone claims it. */
@@ -288,14 +499,21 @@ window.__ModuleLoader__.load({
      * The panel answers from a cached fold first, so it must also say when that
      * fold is stale and how much of it is still being refreshed.
      */
-    function footerSummary(data, totals, pending) {
-      const parts = [`сессий в отчёте: ${count(data.scanned)}`]
-      if (data.skipped) parts.push(`пропущено: ${count(data.skipped)}`)
-      if (totals) parts.push(`шагов: ${count(totals.steps)}`, `моделей: ${count(totals.models)}`)
-      if (data.readNow > 0) parts.push(`прочитано сейчас: ${count(data.readNow)}`)
-      if (data.reused > 0) parts.push(`из кэша: ${count(data.reused)}`)
-      if (pending > 0) parts.push(`обновляю ещё ${count(pending)}`)
-      if (Number.isFinite(data.snapshotAt)) parts.push(`снимок ${ago(data.snapshotAt)}`)
+    function footerSummary(data, totals, pending, t, fmt) {
+      const parts = [t('footer.scanned', { count: fmt.count(data.scanned) })]
+      if (data.skipped) parts.push(t('footer.skipped', { count: fmt.count(data.skipped) }))
+      if (totals) {
+        parts.push(
+          t('footer.steps', { count: fmt.count(totals.steps) }),
+          t('footer.models', { count: fmt.count(totals.models) }),
+        )
+      }
+      if (data.readNow > 0) parts.push(t('footer.readNow', { count: fmt.count(data.readNow) }))
+      if (data.reused > 0) parts.push(t('footer.reused', { count: fmt.count(data.reused) }))
+      if (pending > 0) parts.push(t('footer.pending', { count: fmt.count(pending) }))
+      if (Number.isFinite(data.snapshotAt)) {
+        parts.push(t('footer.snapshot', { ago: fmt.ago(data.snapshotAt) }))
+      }
       return parts.join(' · ')
     }
 
@@ -389,7 +607,31 @@ window.__ModuleLoader__.load({
 `
 
     // --- component ---------------------------------------------------------------
-    function Panel() {
+    /**
+     * The active locale id, kept live so formatters follow it. Falls back to the
+     * panel's own language when the host exposes no locale service.
+     */
+    function useActiveLocale(locale) {
+      const read = React.useCallback(
+        () =>
+          locale !== undefined && typeof locale.getSnapshot === 'function'
+            ? (locale.getSnapshot().active ?? FALLBACK_LOCALE)
+            : FALLBACK_LOCALE,
+        [locale],
+      )
+      const [active, setActive] = React.useState(read)
+      React.useEffect(() => {
+        setActive(read())
+        if (locale === undefined || typeof locale.subscribe !== 'function') return undefined
+        return locale.subscribe(() => setActive(read()))
+      }, [locale, read])
+      return active
+    }
+
+    function Panel({ i18n }) {
+      const t = i18n?.t ?? fallbackTranslate
+      const locale = useActiveLocale(i18n?.locale)
+      const fmt = React.useMemo(() => formattersFor(locale), [locale])
       // Sort and view are the user's settings, not view state: reopening the
       // panel reopens the same question. The payload cache is keyed by the exact
       // query (sort|view), so restoring the query also restores an instant
@@ -431,7 +673,7 @@ window.__ModuleLoader__.load({
         async (signal) => {
           const manual = manualRef.current
           manualRef.current = false
-          if (manual) setAnnounce('Обновляю статистику…')
+          if (manual) setAnnounce(t('announce.refreshing'))
           setState((prev) => ({ ...prev, phase: prev.data ? 'refreshing' : 'loading', error: null }))
           try {
             const query = `?sort=${encodeURIComponent(sort)}&view=${encodeURIComponent(view)}`
@@ -441,14 +683,14 @@ window.__ModuleLoader__.load({
             if (data.ok === false) throw new Error(data.error ?? 'unknown error')
             writeCachedPayload(sort, view, data)
             setState({ phase: 'ready', data })
-            if (manual) setAnnounce('Статистика обновлена')
+            if (manual) setAnnounce(t('announce.updated'))
           } catch (error) {
             if (error && error.name === 'AbortError') {
               // A user-visible deadline, not an unmount: say so instead of
               // leaving the spinner up forever.
               if (timedOutRef.current) {
                 fail(
-                  `превышено время ожидания ответа (${Math.round(REQUEST_TIMEOUT_MS / 1000)} с)`,
+                  t('timeout.reason', { seconds: Math.round(REQUEST_TIMEOUT_MS / 1000) }),
                 )
               }
               return
@@ -456,7 +698,7 @@ window.__ModuleLoader__.load({
             fail(String(error?.message ?? error))
           }
         },
-        [sort, view, fail],
+        [sort, view, fail, t],
       )
 
       React.useEffect(() => {
@@ -534,13 +776,13 @@ window.__ModuleLoader__.load({
       const toolbar = h(
         'div',
         { className: 'dsh-ms-bar' },
-        // The visible "Сортировка:" is a caption, not a control label: the group
+        // The visible sort caption is a caption, not a control label: the group
         // carries the name so a screen reader hears one labelled group instead of
         // a stray word followed by five buttons.
         h(
           'div',
-          { className: 'dsh-ms-group', role: 'group', 'aria-label': 'Сортировка' },
-          h('span', { className: 'dsh-ms-meta', 'aria-hidden': 'true' }, 'Сортировка:'),
+          { className: 'dsh-ms-group', role: 'group', 'aria-label': t('sort.group') },
+          h('span', { className: 'dsh-ms-meta', 'aria-hidden': 'true' }, t('sort.caption')),
           ...SORTS.map((entry) =>
             h(
               'button',
@@ -551,7 +793,7 @@ window.__ModuleLoader__.load({
                 'aria-pressed': sort === entry.key,
                 onClick: () => chooseSort(entry.key),
               },
-              entry.label,
+              t(entry.labelKey),
             ),
           ),
         ),
@@ -564,7 +806,7 @@ window.__ModuleLoader__.load({
             'aria-pressed': view === 'provider',
             onClick: () => chooseView(view === 'model' ? 'provider' : 'model'),
           },
-          view === 'model' ? 'по моделям' : 'по провайдерам',
+          t(view === 'model' ? 'view.models' : 'view.providers'),
         ),
         h(
           'button',
@@ -578,7 +820,7 @@ window.__ModuleLoader__.load({
               writePrefs({ columnsAll: next })
             },
           },
-          'все метрики',
+          t('columns.all'),
         ),
       )
 
@@ -598,7 +840,9 @@ window.__ModuleLoader__.load({
                 scope: 'col',
                 className: column.align === 'left' ? 'dsh-ms-left' : null,
               },
-              typeof column.label === 'function' ? column.label(view) : column.label,
+              t(
+                typeof column.labelKey === 'function' ? column.labelKey(view) : column.labelKey,
+              ),
             ),
           ),
         ),
@@ -609,7 +853,7 @@ window.__ModuleLoader__.load({
         null,
         ...rows.map((row) => {
           const key = `${row.provider}/${row.model}`
-          const ctx = { view, best }
+          const ctx = { view, best, t, fmt }
           return h(
             'tr',
             { key },
@@ -640,7 +884,7 @@ window.__ModuleLoader__.load({
         h(
           'span',
           { className: 'dsh-ms-meta' },
-          state.data ? footerSummary(state.data, totals, pending) : '',
+          state.data ? footerSummary(state.data, totals, pending, t, fmt) : '',
         ),
         h('span', { style: { flex: '1 0 auto' } }),
         h(
@@ -656,7 +900,7 @@ window.__ModuleLoader__.load({
             },
           },
           refreshing ? h('span', { className: 'dsh-ms-spin', 'aria-hidden': 'true' }) : null,
-          state.phase === 'refreshing' ? 'обновляю…' : 'Обновить',
+          t(state.phase === 'refreshing' ? 'action.refreshing' : 'action.refresh'),
         ),
       )
 
@@ -665,21 +909,20 @@ window.__ModuleLoader__.load({
         content = h(
           'div',
           { className: 'dsh-ms-empty', role: 'status' },
-          `Не удалось получить статистику: ${state.error}. Нажмите «Обновить», чтобы повторить.`,
+          t('error.body', { error: state.error }),
         )
       } else if (state.phase === 'loading') {
-        content = h(
-          'div',
-          { className: 'dsh-ms-empty' },
-          'Считаю статистику по истории сессий… Первый в этой установке проход читает все логи сессий и может занять до минуты. Дальше ответ берётся из кэша сразу, а свежие данные догружаются в фоне.',
-        )
+        content = h('div', { className: 'dsh-ms-empty' }, t('loading.body'))
       } else if (rows.length === 0) {
         content = h(
           'div',
           { className: 'dsh-ms-empty' },
           pending > 0
-            ? `Прочитано ${count(state.data.scanned)} сессий, ещё ${count(pending)} в очереди — данные появятся по мере обработки.`
-            : 'В истории пока нет замеров. Поработайте в сессии — метрики считаются по уже записанным логам.',
+            ? t('empty.pending', {
+                scanned: fmt.count(state.data.scanned),
+                pending: fmt.count(pending),
+              })
+            : t('empty.nodata'),
         )
       } else {
         content = h('div', { className: 'dsh-ms-wrap' }, h('table', { className: 'dsh-ms-table' }, header, body))
@@ -690,7 +933,7 @@ window.__ModuleLoader__.load({
           ? h(
               'div',
               { className: 'dsh-ms-alert', role: 'status' },
-              `Не удалось обновить данные: ${state.warning}. Показаны последние полученные значения — нажмите «Обновить», чтобы повторить.`,
+              t('warn.body', { warning: state.warning }),
             )
           : null
 
@@ -706,12 +949,8 @@ window.__ModuleLoader__.load({
           { className: 'dsh-ms-head' },
           // The section label already names this panel in the host's navigation;
           // inside the panel it is a heading, not decorative text.
-          h('h2', { className: 'dsh-ms-title' }, 'Скорость и стабильность моделей'),
-          h(
-            'span',
-            { className: 'dsh-ms-meta' },
-            'Считается по истории сессий. Отклик — время до первого токена, tok/s — по спану стриминга провайдера.',
-          ),
+          h('h2', { className: 'dsh-ms-title' }, t('panel.title')),
+          h('span', { className: 'dsh-ms-meta' }, t('panel.subtitle')),
         ),
         toolbar,
         alert,
@@ -720,12 +959,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dsh-ms-note' },
-          'Зелёным отмечены лучшая медиана отклика и лучшая медиана скорости среди показанных строк. ' +
-            'Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. ' +
-            (showAllColumns
-              ? '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. ' +
-                '«кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала.'
-              : 'Отклик p90, tok/s max, «замер», llm / шаг, «кэш» и «виден» — за кнопкой «все метрики».'),
+          t('note.core') + (showAllColumns ? t('note.extra') : t('note.collapsed')),
         ),
       )
     }
@@ -735,10 +969,28 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         const slots = ctx.get('slots')
         if (slots === undefined) return
+
+        // The host locale service is resolved on first use rather than here: the
+        // panel is only rendered once the settings dialog opens, by which point a
+        // service provided later in the boot sequence is guaranteed to exist.
+        // Without one, the panel keeps its own copy (see bindPanelLocale).
+        let bound = null
+        const i18n = () => {
+          if (bound === null) bound = bindPanelLocale(ctx)
+          return bound
+        }
+
         slots.inject('settings.section', () =>
           slots.register(
-            { name: 'settings.section', id: 'model-stats', order: 32, label: () => 'Скорость моделей' },
-            Panel,
+            {
+              name: 'settings.section',
+              id: 'model-stats',
+              order: 32,
+              // The section list is re-derived on every locale revision, so the
+              // navigation label follows a language switch too.
+              label: () => i18n().t('section.label'),
+            },
+            (props) => h(Panel, { ...props, i18n: i18n() }),
           ),
         )
       },

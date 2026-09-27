@@ -51,6 +51,17 @@ Two surfaces, one collector, so they can never disagree:
    once the numbers are still.
 2. **The `model_stats` tool** — the same numbers as plain text for the agent.
 
+The panel follows the GUI's language. Its copy ships as `ru` and `en`
+dictionaries registered under the `dsh-model-stats` locale namespace, so the
+Settings language switcher (and any language pack) applies to it, including the
+section label and the number and date formats. On a host without the `locale`
+client service the panel falls back to its built-in Russian copy.
+
+The panel has no URL of its own: the settings dialog is an overlay that does not
+put the open section into the address bar, so its state lives in `localStorage`
+(`dsh-model-stats:prefs:v1`) rather than in a query parameter. A deep link would
+have to be the host shell's, not this plugin's.
+
 The panel's data comes from `GET /api/model-stats` (`?sort=&view=&provider=&limit=`)
 on the same host as the GUI.
 
