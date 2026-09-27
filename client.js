@@ -21,6 +21,8 @@ window.__ModuleLoader__.load({
       { key: 'lastSeen', label: 'недавние' },
     ]
 
+    const DEFAULT_QUERY = { sort: 'ttft', view: 'model' }
+
     // --- formatting helpers ------------------------------------------------------
     const dash = '-'
 
@@ -132,6 +134,17 @@ window.__ModuleLoader__.load({
       } catch {
         // A full or disabled store is not the panel's problem.
       }
+    }
+
+    /**
+     * The query the panel opens with: the user's last choice, validated against
+     * the current option list, falling back to the defaults. A stale or corrupt
+     * value must never reach the host as a query.
+     */
+    function readStoredQuery() {
+      const prefs = readPrefs()
+      const sort = SORTS.some((entry) => entry.key === prefs.sort) ? prefs.sort : DEFAULT_QUERY.sort
+      return { sort, view: prefs.view === 'provider' ? 'provider' : DEFAULT_QUERY.view }
     }
 
     function shortLabel(id) {
@@ -304,15 +317,20 @@ window.__ModuleLoader__.load({
 
     // --- component ---------------------------------------------------------------
     function Panel() {
-      const [sort, setSort] = React.useState('ttft')
-      const [view, setView] = React.useState('model')
+      // Sort and view are the user's settings, not view state: reopening the
+      // panel reopens the same question. The payload cache is keyed by the exact
+      // query (sort|view), so restoring the query also restores an instant
+      // first paint instead of a spinner.
+      const [initialQuery] = React.useState(readStoredQuery)
+      const [sort, setSort] = React.useState(initialQuery.sort)
+      const [view, setView] = React.useState(initialQuery.view)
       // Ten columns do not fit a settings section, so the deep metrics start
       // collapsed; the choice sticks to the browser across reopenings.
       const [showAllColumns, setShowAllColumns] = React.useState(() => readPrefs().columnsAll === true)
       // The last answer for this exact query, if the browser still has it. It is
       // shown immediately and replaced the moment the host answers.
       const [state, setState] = React.useState(() => {
-        const cached = readCachedPayload('ttft', 'model')
+        const cached = readCachedPayload(initialQuery.sort, initialQuery.view)
         return cached === null ? { phase: 'loading' } : { phase: 'ready', data: cached }
       })
       const timedOutRef = React.useRef(false)
@@ -420,6 +438,18 @@ window.__ModuleLoader__.load({
         }
       }, [rows])
 
+      // Choosing a sort or a view is a lasting decision, so it is written down
+      // as it is made — never in an effect keyed on the value, which would also
+      // rewrite the default on a panel the user only glanced at.
+      const chooseSort = (key) => {
+        setSort(key)
+        writePrefs({ sort: key })
+      }
+      const chooseView = (next) => {
+        setView(next)
+        writePrefs({ view: next })
+      }
+
       const toolbar = h(
         'div',
         { className: 'dsh-ms-bar' },
@@ -432,7 +462,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dsh-ms-chip',
               'aria-pressed': sort === entry.key,
-              onClick: () => setSort(entry.key),
+              onClick: () => chooseSort(entry.key),
             },
             entry.label,
           ),
@@ -444,7 +474,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: 'dsh-ms-chip',
             'aria-pressed': view === 'provider',
-            onClick: () => setView(view === 'model' ? 'provider' : 'model'),
+            onClick: () => chooseView(view === 'model' ? 'provider' : 'model'),
           },
           view === 'model' ? 'по моделям' : 'по провайдерам',
         ),
