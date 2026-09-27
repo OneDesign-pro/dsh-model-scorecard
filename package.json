@@ -1,0 +1,39 @@
+{
+  "name": "dsh-model-stats",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Per-model and per-provider speed/stability analytics folded from DSH session history, with zero runtime dependencies.",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "meta": {
+    "title": "Model Stats",
+    "description": "Историческая аналитика по моделям и провайдерам: TTFT, tok/s, ошибки, стабильность."
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
+  },
+  "files": [
+    "lib/",
+    "tools/",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "COMPARISON.md",
+    "package.json"
+  ]
+}
