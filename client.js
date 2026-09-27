@@ -328,8 +328,13 @@ window.__ModuleLoader__.load({
 /* Visually hidden, still read: a shortened model id must not lose the full one. */
 .dsh-ms-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0;
   overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.dsh-ms-wrap { overflow-x:auto; overscroll-behavior:contain; border:1px solid var(--dsw-alias-border-l1);
-  border-radius:8px; background:var(--dsw-alias-bg-layer-1); }
+/* A bounded scroller, not a growing table: with ~50 rows the panel used to push
+   the footer and the legend far below the fold, and the sticky header below had
+   no scroller to stick to (overflow-x alone never scrolls vertically). The cap
+   is in viewport units so a short window still gets a usable table. */
+.dsh-ms-wrap { overflow:auto; max-height:min(56vh, 520px); overscroll-behavior:contain;
+  border:1px solid var(--dsw-alias-border-l1); border-radius:8px;
+  background:var(--dsw-alias-bg-layer-1); }
 .dsh-ms-table { border-collapse:collapse; width:100%; font-size:12px; font-variant-numeric:tabular-nums; }
 .dsh-ms-table th, .dsh-ms-table td { padding:6px 10px; text-align:right; white-space:nowrap;
   border-bottom:1px solid var(--dsw-alias-border-l1); }
@@ -339,8 +344,12 @@ window.__ModuleLoader__.load({
    competes for width, which turns a model path into a vertical ribbon. Give
    the column a readable floor and let the wrapper scroll instead. */
 .dsh-ms-table th.dsh-ms-left, .dsh-ms-table td.dsh-ms-model { min-width:200px; }
-.dsh-ms-table thead th { position:sticky; top:0; background:var(--dsw-alias-bg-layer-2);
-  color:var(--dsw-alias-label-secondary); font-weight:600; }
+/* The rule under the pinned header has to travel with it: the cells' own
+   border-bottom scrolls away with the rows, leaving text to slide under a
+   header with no edge of its own. */
+.dsh-ms-table thead th { position:sticky; top:0; z-index:1; background:var(--dsw-alias-bg-layer-2);
+  color:var(--dsw-alias-label-secondary); font-weight:600;
+  box-shadow:inset 0 -1px 0 var(--dsw-alias-border-l1); }
 .dsh-ms-table tbody tr:last-child td { border-bottom:none; }
 .dsh-ms-table tbody tr:hover td { background:var(--dsw-alias-bg-layer-2); }
 /* The width cap lives on an inner block, not on the td: in an auto-layout table
