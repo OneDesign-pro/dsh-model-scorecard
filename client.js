@@ -95,12 +95,15 @@ window.__ModuleLoader__.load({
     // agent's text report, which is unchanged).
     const MAX_LABEL = 44
 
-    // A request can legitimately take about a minute: the host folds session
-    // logs, and on a large history a single call has been measured at 47-56 s.
-    // The budget therefore has to sit above that, or the panel aborts a request
-    // the host is still working on and reports an error for a panel that would
-    // have answered. The loading copy and this number describe one thing.
-    const REQUEST_TIMEOUT_MS = 120000
+    // The host bounds its own panel answer (PANEL_BUDGET_MS, 2.5 s in this tree)
+    // and returns partial work, which the refresh loop then polls for. This
+    // deadline is only the point where a host that is not answering at all
+    // becomes something the user can act on: well above that budget plus the
+    // corpus listing, and still bounded. It was 25 s, which was below the 47-56 s
+    // answer time measured on a host running an older build of the plugin — and
+    // a panel that aborts a request the host is still working on reports an
+    // error where it would otherwise have had data.
+    const REQUEST_TIMEOUT_MS = 60000
 
     // The last successful answer is kept in the browser so opening the panel
     // shows the table at once instead of a spinner, then refreshes behind it.
@@ -643,7 +646,7 @@ window.__ModuleLoader__.load({
         content = h(
           'div',
           { className: 'dsh-ms-empty' },
-          'Считаю статистику по истории сессий… Первый в этой установке проход читает все логи сессий и может занять до минуты-двух. Дальше ответ берётся из кэша сразу, а свежие данные догружаются в фоне.',
+          'Считаю статистику по истории сессий… Первый в этой установке проход читает все логи сессий и может занять до минуты. Дальше ответ берётся из кэша сразу, а свежие данные догружаются в фоне.',
         )
       } else if (rows.length === 0) {
         content = h(
