@@ -187,6 +187,9 @@ window.__ModuleLoader__.load({
 .dsh-ms-note { font-size:11.5px; line-height:1.5; color:var(--dsw-alias-label-secondary);
   max-width:78ch; }
 .dsh-ms-empty { padding:16px; font-size:13px; color:var(--dsw-alias-label-secondary); }
+.dsh-ms-alert { padding:8px 10px; border-radius:8px; border:1px solid var(--dsw-alias-border-l1);
+  border-left:3px solid var(--dsw-alias-state-warn-primary); background:var(--dsw-alias-bg-layer-2);
+  font-size:12px; line-height:1.5; color:var(--dsw-alias-label-primary); overflow-wrap:anywhere; }
 .dsh-ms-foot { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
 `
 
@@ -204,6 +207,19 @@ window.__ModuleLoader__.load({
       const retriesRef = React.useRef(0)
       const lastPendingRef = React.useRef(0)
 
+      // A failed request must not wipe the table. The host folds in the
+      // background and answers early, so a single hiccup — or one dropped reply
+      // out of the refresh loop — used to replace a perfectly good table with an
+      // error line. Keep the last answer for this exact query and attach a
+      // warning; only a failure with nothing to show becomes a full error.
+      const fail = React.useCallback((message) => {
+        setState((prev) =>
+          prev.data
+            ? { phase: 'ready', data: prev.data, warning: message }
+            : { phase: 'error', error: message },
+        )
+      }, [])
+
       const load = React.useCallback(
         async (signal) => {
           setState((prev) => ({ ...prev, phase: prev.data ? 'refreshing' : 'loading', error: null }))
@@ -220,17 +236,16 @@ window.__ModuleLoader__.load({
               // A user-visible deadline, not an unmount: say so instead of
               // leaving the spinner up forever.
               if (timedOutRef.current) {
-                setState({
-                  phase: 'error',
-                  error: `Превышено время ожидания ответа (${Math.round(REQUEST_TIMEOUT_MS / 1000)} с). Нажмите «Обновить».`,
-                })
+                fail(
+                  `превышено время ожидания ответа (${Math.round(REQUEST_TIMEOUT_MS / 1000)} с)`,
+                )
               }
               return
             }
-            setState({ phase: 'error', error: String(error?.message ?? error) })
+            fail(String(error?.message ?? error))
           }
         },
-        [sort, view],
+        [sort, view, fail],
       )
 
       React.useEffect(() => {
@@ -422,7 +437,11 @@ window.__ModuleLoader__.load({
 
       let content
       if (state.phase === 'error') {
-        content = h('div', { className: 'dsh-ms-empty' }, `Не удалось получить статистику: ${state.error}`)
+        content = h(
+          'div',
+          { className: 'dsh-ms-empty' },
+          `Не удалось получить статистику: ${state.error}. Нажмите «Обновить», чтобы повторить.`,
+        )
       } else if (state.phase === 'loading') {
         content = h(
           'div',
@@ -441,6 +460,15 @@ window.__ModuleLoader__.load({
         content = h('div', { className: 'dsh-ms-wrap' }, h('table', { className: 'dsh-ms-table' }, header, body))
       }
 
+      const alert =
+        state.phase === 'ready' && state.warning
+          ? h(
+              'div',
+              { className: 'dsh-ms-alert', role: 'status' },
+              `Не удалось обновить данные: ${state.warning}. Показаны последние полученные значения — нажмите «Обновить», чтобы повторить.`,
+            )
+          : null
+
       return h(
         'div',
         { className: 'dsh-ms-root' },
@@ -456,6 +484,7 @@ window.__ModuleLoader__.load({
           ),
         ),
         toolbar,
+        alert,
         content,
         footer,
         h(
