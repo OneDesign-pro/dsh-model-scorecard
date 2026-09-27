@@ -110,6 +110,30 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // How the panel is set up is the user's choice, not a cache: it lives in its
+    // own key so that dropping the payload cache can never drop the preferences.
+    const PREFS_KEY = 'dsh-model-stats:prefs:v1'
+
+    /** Best-effort read, same contract as the payload cache. */
+    function readPrefs() {
+      try {
+        const raw = window.localStorage.getItem(PREFS_KEY)
+        if (raw === null) return {}
+        const parsed = JSON.parse(raw)
+        return parsed !== null && typeof parsed === 'object' ? parsed : {}
+      } catch {
+        return {}
+      }
+    }
+
+    function writePrefs(patch) {
+      try {
+        window.localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readPrefs(), ...patch }))
+      } catch {
+        // A full or disabled store is not the panel's problem.
+      }
+    }
+
     function shortLabel(id) {
       if (typeof id !== 'string' || id.length <= MAX_LABEL) return id
       const segments = id.split('/').filter((part) => part !== '')
@@ -119,6 +143,85 @@ window.__ModuleLoader__.load({
       }
       // A long single token has no informative segment: keep both ends.
       return `${id.slice(0, 20)}…${id.slice(-20)}`
+    }
+
+    // --- columns -----------------------------------------------------------------
+    // Declared once and consumed by both the header and the body, so a metric's
+    // label, its cell and its position cannot drift apart between the two.
+    //
+    // `core` columns are what the panel shows by default. This table lives in a
+    // settings section, and ten columns of `white-space: nowrap` numbers do not
+    // fit there without a horizontal scrollbar. The `extra` columns hold the
+    // deeper numbers and stay one click away — nothing is dropped, only deferred.
+    //
+    // `base` is the class of an ordinary cell ('num' = primary, otherwise dim),
+    // `tone` may override it per row (best median, error, low confidence).
+    const COLUMNS = [
+      {
+        key: 'name',
+        align: 'left',
+        label: (view) => (view === 'model' ? 'Модель' : 'Провайдер'),
+        cell: (row, ctx) =>
+          h(
+            'div',
+            { className: 'dsh-ms-model-inner' },
+            h(
+              'span',
+              {
+                className: 'dsh-ms-model-name',
+                title: ctx.view === 'model' ? row.model : row.provider,
+              },
+              ctx.view === 'model' ? shortLabel(row.model) : row.provider,
+            ),
+            ctx.view === 'model'
+              ? h('span', { className: 'dsh-ms-provider', title: row.provider }, row.provider)
+              : null,
+          ),
+      },
+      { key: 'steps', tier: 'core', base: 'num', label: 'шагов', cell: (row) => String(row.steps ?? dash) },
+      {
+        key: 'ttft',
+        tier: 'core',
+        base: 'num',
+        label: 'отклик med',
+        cell: (row) => ms(row.ttftMedian),
+        tone: (row, ctx) => (ctx.best.ttft === row ? 'dsh-ms-good' : null),
+      },
+      {
+        key: 'tps',
+        tier: 'core',
+        base: 'num',
+        label: 'tok/s med',
+        cell: (row) => num(row.tpsMedian, 1),
+        tone: (row, ctx) => (ctx.best.tps === row ? 'dsh-ms-good' : null),
+      },
+      {
+        key: 'errors',
+        tier: 'core',
+        label: 'ош.',
+        cell: (row) => String(row.errors ?? 0),
+        tone: (row) => (row.errors > 0 ? 'dsh-ms-bad' : null),
+      },
+      { key: 'ttftP90', tier: 'extra', label: 'отклик p90', cell: (row) => ms(row.ttftP90) },
+      { key: 'tpsMax', tier: 'extra', label: 'tok/s max', cell: (row) => num(row.tpsMax, 1) },
+      {
+        key: 'confidence',
+        tier: 'extra',
+        label: 'замер',
+        cell: (row) => (row.speedConfidence === null ? dash : `${Math.round(row.speedConfidence * 100)}%`),
+        tone: (row) => (row.speedConfidence !== null && row.speedConfidence < 0.5 ? 'dsh-ms-warn' : null),
+      },
+      { key: 'llm', tier: 'extra', label: 'llm / шаг', cell: (row) => ms(row.llmMeanMs) },
+      { key: 'cache', tier: 'extra', label: 'кэш', cell: (row) => pct(row.cacheHitRate) },
+      // The panel can sort by recency, so the timestamp it sorts by is a column
+      // of its own instead of an invisible key.
+      { key: 'lastSeen', tier: 'extra', label: 'виден', cell: (row) => ago(row.lastSeen) },
+    ]
+
+    /** An ordinary cell is dimmed unless its column's tone claims it. */
+    function cellClass(column, row, ctx) {
+      const tone = typeof column.tone === 'function' ? column.tone(row, ctx) : null
+      return tone ?? (column.base === 'num' ? 'dsh-ms-num' : 'dsh-ms-dim')
     }
 
     /**
@@ -162,6 +265,12 @@ window.__ModuleLoader__.load({
 .dsh-ms-table { border-collapse:collapse; width:100%; font-size:12px; }
 .dsh-ms-table th, .dsh-ms-table td { padding:6px 10px; text-align:right; white-space:nowrap;
   border-bottom:1px solid var(--dsw-alias-border-l1); }
+.dsh-ms-table .dsh-ms-left { text-align:left; }
+/* In an auto-layout table the browser may shrink the name column to its
+   min-content — a single breakable character — once the expanded column set
+   competes for width, which turns a model path into a vertical ribbon. Give
+   the column a readable floor and let the wrapper scroll instead. */
+.dsh-ms-table th.dsh-ms-left, .dsh-ms-table td.dsh-ms-model { min-width:200px; }
 .dsh-ms-table thead th { position:sticky; top:0; background:var(--dsw-alias-bg-layer-2);
   color:var(--dsw-alias-label-secondary); font-weight:600; }
 .dsh-ms-table tbody tr:last-child td { border-bottom:none; }
@@ -197,6 +306,9 @@ window.__ModuleLoader__.load({
     function Panel() {
       const [sort, setSort] = React.useState('ttft')
       const [view, setView] = React.useState('model')
+      // Ten columns do not fit a settings section, so the deep metrics start
+      // collapsed; the choice sticks to the browser across reopenings.
+      const [showAllColumns, setShowAllColumns] = React.useState(() => readPrefs().columnsAll === true)
       // The last answer for this exact query, if the browser still has it. It is
       // shown immediately and replaced the moment the host answers.
       const [state, setState] = React.useState(() => {
@@ -336,7 +448,23 @@ window.__ModuleLoader__.load({
           },
           view === 'model' ? 'по моделям' : 'по провайдерам',
         ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsh-ms-chip',
+            'aria-pressed': showAllColumns,
+            onClick: () => {
+              const next = !showAllColumns
+              setShowAllColumns(next)
+              writePrefs({ columnsAll: next })
+            },
+          },
+          'все метрики',
+        ),
       )
+
+      const visible = COLUMNS.filter((column) => column.tier !== 'extra' || showAllColumns)
 
       const header = h(
         'thead',
@@ -344,16 +472,13 @@ window.__ModuleLoader__.load({
         h(
           'tr',
           null,
-          h('th', { style: { textAlign: 'left' } }, view === 'model' ? 'Модель' : 'Провайдер'),
-          h('th', null, 'шагов'),
-          h('th', null, 'отклик med'),
-          h('th', null, 'отклик p90'),
-          h('th', null, 'tok/s med'),
-          h('th', null, 'tok/s max'),
-          h('th', null, 'замер'),
-          h('th', null, 'llm / шаг'),
-          h('th', null, 'кэш'),
-          h('th', null, 'ош.'),
+          ...visible.map((column) =>
+            h(
+              'th',
+              { key: column.key, className: column.align === 'left' ? 'dsh-ms-left' : null },
+              typeof column.label === 'function' ? column.label(view) : column.label,
+            ),
+          ),
         ),
       )
 
@@ -362,51 +487,19 @@ window.__ModuleLoader__.load({
         null,
         ...rows.map((row) => {
           const key = `${row.provider}/${row.model}`
-          const isBestTtft = best.ttft === row
-          const isBestTps = best.tps === row
+          const ctx = { view, best }
           return h(
             'tr',
             { key },
-            h(
-              'td',
-              { className: 'dsh-ms-model' },
+            ...visible.map((column) =>
               h(
-                'div',
-                { className: 'dsh-ms-model-inner' },
-                h(
-                  'span',
-                  { className: 'dsh-ms-model-name', title: view === 'model' ? row.model : row.provider },
-                  view === 'model' ? shortLabel(row.model) : row.provider,
-                ),
-                view === 'model'
-                  ? h('span', { className: 'dsh-ms-provider', title: row.provider }, row.provider)
-                  : null,
+                'td',
+                {
+                  key: column.key,
+                  className: column.key === 'name' ? 'dsh-ms-model' : cellClass(column, row, ctx),
+                },
+                column.cell(row, ctx),
               ),
-            ),
-            h('td', { className: 'dsh-ms-num' }, String(row.steps ?? dash)),
-            h(
-              'td',
-              { className: isBestTtft ? 'dsh-ms-good' : 'dsh-ms-num' },
-              ms(row.ttftMedian),
-            ),
-            h('td', { className: 'dsh-ms-dim' }, ms(row.ttftP90)),
-            h(
-              'td',
-              { className: isBestTps ? 'dsh-ms-good' : 'dsh-ms-num' },
-              num(row.tpsMedian, 1),
-            ),
-            h('td', { className: 'dsh-ms-dim' }, num(row.tpsMax, 1)),
-            h(
-              'td',
-              { className: row.speedConfidence !== null && row.speedConfidence < 0.5 ? 'dsh-ms-warn' : 'dsh-ms-dim' },
-              row.speedConfidence === null ? dash : `${Math.round(row.speedConfidence * 100)}%`,
-            ),
-            h('td', { className: 'dsh-ms-dim' }, ms(row.llmMeanMs)),
-            h('td', { className: 'dsh-ms-dim' }, pct(row.cacheHitRate)),
-            h(
-              'td',
-              { className: row.errors > 0 ? 'dsh-ms-bad' : 'dsh-ms-dim' },
-              String(row.errors ?? 0),
             ),
           )
         }),
@@ -491,8 +584,11 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'dsh-ms-note' },
           'Зелёным отмечены лучшая медиана отклика и лучшая медиана скорости среди показанных строк. ' +
-            '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. ' +
-            '«кэш» — доля чтения из кэша промпта во входных токенах. Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная.',
+            'Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. ' +
+            (showAllColumns
+              ? '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. ' +
+                '«кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала.'
+              : 'Отклик p90, tok/s max, «замер», llm / шаг, «кэш» и «виден» — за кнопкой «все метрики».'),
         ),
       )
     }
