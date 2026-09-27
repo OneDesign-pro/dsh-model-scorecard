@@ -141,6 +141,16 @@ every discriminating fixture is also asserted to disagree: each of `ttft`, `spee
 and the `errors` tie-break carries a case whose mean and median pick different
 winners, and the test fails if that stops being true rather than passing quietly.
 
+The panel's own state machine has a test too, `tools/verify-panel-state.mjs`. The
+client half is browser-only and has no build step or importer, so the test runs
+`client.js` in a context whose module loader, `localStorage`, `fetch`, timers and
+React are replaced with the smallest fakes that can drive the registered section:
+it clicks the sort chips and asserts what the tree contains. Its contract is one
+line — **rows already on screen are never replaced by a message**. Switching the
+sort used to blank the table and, when that request was slow, failed or was
+aborted by the next click, the rows did not come back on their own. The test fails
+on ten checks if that behaviour returns.
+
 ## Usage
 
 **Panel:** Settings → «Скорость моделей» (see *Where to find it* above).
@@ -194,6 +204,7 @@ Or through the plugin manager, pointing `install_bundle` at this directory.
 ```bash
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last
+node tools/verify-panel-state.mjs # panel: a query switch never takes the rows off the screen
 node tools/harness-real.mjs      # the same collector driven against this machine's real store
 node tools/verify-official.mjs   # field-by-field cross-check against sessionStats
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model

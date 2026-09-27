@@ -72,6 +72,10 @@ window.__ModuleLoader__.load({
           'Не удалось получить статистику: {error}. Нажмите «Обновить», чтобы повторить.',
         'warn.body':
           'Не удалось обновить данные: {warning}. Показаны последние полученные значения — нажмите «Обновить», чтобы повторить.',
+        'warn.stale':
+          'Не удалось получить порядок «{sort}»: {warning}. Показаны строки прежнего запроса — нажмите «Обновить», чтобы повторить.',
+        'status.updating':
+          'Показан прежний ответ — обновляю сортировку «{sort}». Обычно это доли секунды.',
         'timeout.reason': 'превышено время ожидания ответа ({seconds} с)',
         'announce.refreshing': 'Обновляю статистику…',
         'announce.updated': 'Статистика обновлена',
@@ -128,6 +132,10 @@ window.__ModuleLoader__.load({
         'error.body': 'Could not get the statistics: {error}. Press “Refresh” to retry.',
         'warn.body':
           'Could not refresh: {warning}. Showing the last values received — press “Refresh” to retry.',
+        'warn.stale':
+          'Could not load the “{sort}” order: {warning}. Showing the previous query’s rows — press “Refresh” to retry.',
+        'status.updating':
+          'Showing the previous answer — updating the “{sort}” order. This usually takes a moment.',
         'timeout.reason': 'the request timed out ({seconds} s)',
         'announce.refreshing': 'Refreshing statistics…',
         'announce.updated': 'Statistics updated',
@@ -291,7 +299,15 @@ window.__ModuleLoader__.load({
     const REFRESH_INTERVAL_MS = 1500
     const MAX_REFRESHES = 20
 
-    function cacheKey(sort, view) {
+    /**
+     * The identity of one query: `sort|view`.
+     *
+     * It names a cache entry and it labels the rows a payload answers. The panel
+     * needs the second job because a switch to another sort has no answer yet,
+     * and what is on screen in the meantime belongs to a query the user is no
+     * longer asking for.
+     */
+    function queryKey(sort, view) {
       return `${sort}|${view}`
     }
 
@@ -309,7 +325,7 @@ window.__ModuleLoader__.load({
     }
 
     function readCachedPayload(sort, view) {
-      const entry = readCache()[cacheKey(sort, view)]
+      const entry = readCache()[queryKey(sort, view)]
       if (entry === null || typeof entry !== 'object') return null
       if (typeof entry.at !== 'number' || Date.now() - entry.at > STORE_MAX_AGE_MS) return null
       const data = entry.data
@@ -321,7 +337,7 @@ window.__ModuleLoader__.load({
     function writeCachedPayload(sort, view, data) {
       try {
         const entries = readCache()
-        entries[cacheKey(sort, view)] = { at: Date.now(), data }
+        entries[queryKey(sort, view)] = { at: Date.now(), data }
         // Two keys per view are enough for a session; old ones would only grow.
         const keys = Object.keys(entries)
         for (const key of keys.slice(0, Math.max(0, keys.length - 4))) delete entries[key]
@@ -364,6 +380,51 @@ window.__ModuleLoader__.load({
       const prefs = readPrefs()
       const sort = SORTS.some((entry) => entry.key === prefs.sort) ? prefs.sort : DEFAULT_QUERY.sort
       return { sort, view: prefs.view === 'provider' ? 'provider' : DEFAULT_QUERY.view }
+    }
+
+    // --- panel state -------------------------------------------------------------
+    // The state machine is four pure functions, written out rather than inlined
+    // into the component so that `tools/verify-panel-state.mjs` can drive the
+    // real panel through them. They exist because of one rule:
+    //
+    //   rows already on screen are never replaced by a message.
+    //
+    // Switching the sort asks a question the host has not answered yet, so the
+    // panel has a choice: blank itself, or keep what it has. It keeps it. Losing
+    // the table is the one outcome the user cannot act on — and if that request
+    // is slow, fails, or is aborted by a following click, the table did not come
+    // back on its own. `dataQuery` records which query the visible rows answer,
+    // so the panel can name the wait instead of passing off a stale order as the
+    // requested one.
+    const EMPTY_STATE = { phase: 'loading', data: null, dataQuery: null, warning: null, error: null }
+
+    /** The state a switch to `key` starts from: cached answer, kept rows, or nothing. */
+    function querySwitched(prev, cached, key) {
+      const fresh = cached ?? null
+      if (fresh !== null) return { phase: 'ready', data: fresh, dataQuery: key, warning: null, error: null }
+      if (prev.data === null || prev.data === undefined) return EMPTY_STATE
+      return { ...prev, phase: 'loading', warning: null, error: null }
+    }
+
+    /** The state an answer for `key` puts the panel in. */
+    function queryAnswered(data, key) {
+      return { phase: 'ready', data, dataQuery: key, warning: null, error: null }
+    }
+
+    /** The state a failed request puts the panel in. Rows survive a failure. */
+    function queryFailed(prev, message) {
+      if (prev.data === null || prev.data === undefined) {
+        return { phase: 'error', data: null, dataQuery: null, warning: null, error: message }
+      }
+      return { ...prev, phase: 'ready', warning: message, error: null }
+    }
+
+    /** Which block the panel renders. Rows win over every message. */
+    function contentKind(rows, state) {
+      if (rows.length > 0) return 'table'
+      if (state.phase === 'error') return 'error'
+      if (state.phase === 'loading' || state.phase === 'refreshing') return 'loading'
+      return 'empty'
     }
 
     function shortLabel(id) {
@@ -603,6 +664,10 @@ window.__ModuleLoader__.load({
 .dsh-ms-alert { padding:8px 10px; border-radius:8px; border:1px solid var(--dsw-alias-border-l1);
   border-left:3px solid var(--dsw-alias-state-warn-primary); background:var(--dsw-alias-bg-layer-2);
   font-size:12px; line-height:1.5; color:var(--dsw-alias-label-primary); overflow-wrap:anywhere; }
+/* The same line, without the alarm: a request still in flight is not a failure,
+   and colouring it like one would teach the user to ignore the warn border. */
+.dsh-ms-alert.dsh-ms-quiet { border-left-color:var(--dsw-alias-border-l2);
+  color:var(--dsw-alias-label-secondary); }
 .dsh-ms-foot { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
 `
 
@@ -642,11 +707,16 @@ window.__ModuleLoader__.load({
       // Ten columns do not fit a settings section, so the deep metrics start
       // collapsed; the choice sticks to the browser across reopenings.
       const [showAllColumns, setShowAllColumns] = React.useState(() => readPrefs().columnsAll === true)
-      // The last answer for this exact query, if the browser still has it. It is
-      // shown immediately and replaced the moment the host answers.
+      // The last answer, whatever query it answered. It is shown immediately
+      // when the browser still has it and replaced the moment the host answers;
+      // when it is older than the current query it stays on screen and says so.
       const [state, setState] = React.useState(() => {
         const cached = readCachedPayload(initialQuery.sort, initialQuery.view)
-        return cached === null ? { phase: 'loading' } : { phase: 'ready', data: cached }
+        return querySwitched(
+          EMPTY_STATE,
+          cached,
+          queryKey(initialQuery.sort, initialQuery.view),
+        )
       })
       const timedOutRef = React.useRef(false)
       const retriesRef = React.useRef(0)
@@ -656,17 +726,15 @@ window.__ModuleLoader__.load({
       const manualRef = React.useRef(false)
       const [announce, setAnnounce] = React.useState('')
 
-      // A failed request must not wipe the table. The host folds in the
-      // background and answers early, so a single hiccup — or one dropped reply
-      // out of the refresh loop — used to replace a perfectly good table with an
-      // error line. Keep the last answer for this exact query and attach a
-      // warning; only a failure with nothing to show becomes a full error.
+      // A failed request must not wipe the table — not for a refresh of the same
+      // query, and not for the switch that produced it. The host folds in the
+      // background and answers early, so a single hiccup used to replace a
+      // perfectly good table with an error line; the switch case was worse,
+      // because the rows had already been dropped before the request went out.
+      // Keep the last answer and attach a warning; only a failure with nothing
+      // to show becomes a full error.
       const fail = React.useCallback((message) => {
-        setState((prev) =>
-          prev.data
-            ? { phase: 'ready', data: prev.data, warning: message }
-            : { phase: 'error', error: message },
-        )
+        setState((prev) => queryFailed(prev, message))
       }, [])
 
       const load = React.useCallback(
@@ -674,7 +742,12 @@ window.__ModuleLoader__.load({
           const manual = manualRef.current
           manualRef.current = false
           if (manual) setAnnounce(t('announce.refreshing'))
-          setState((prev) => ({ ...prev, phase: prev.data ? 'refreshing' : 'loading', error: null }))
+          setState((prev) => ({
+            ...prev,
+            phase: prev.data ? 'refreshing' : 'loading',
+            warning: null,
+            error: null,
+          }))
           try {
             const query = `?sort=${encodeURIComponent(sort)}&view=${encodeURIComponent(view)}`
             const response = await fetch(`/api/model-stats${query}`, { signal })
@@ -682,7 +755,7 @@ window.__ModuleLoader__.load({
             const data = await response.json()
             if (data.ok === false) throw new Error(data.error ?? 'unknown error')
             writeCachedPayload(sort, view, data)
-            setState({ phase: 'ready', data })
+            setState(queryAnswered(data, queryKey(sort, view)))
             if (manual) setAnnounce(t('announce.updated'))
           } catch (error) {
             if (error && error.name === 'AbortError') {
@@ -702,10 +775,13 @@ window.__ModuleLoader__.load({
       )
 
       React.useEffect(() => {
-        // Switching the sort or view switches the query, so show whatever the
-        // browser already has for the new one rather than the previous table.
-        const cached = readCachedPayload(sort, view)
-        setState(cached === null ? { phase: 'loading' } : { phase: 'ready', data: cached })
+        // Switching the sort or view switches the query: show what the browser
+        // already has for the new one, and when it has nothing, keep the rows
+        // that are already on screen rather than blanking the panel while the
+        // host is asked.
+        setState((prev) =>
+          querySwitched(prev, readCachedPayload(sort, view), queryKey(sort, view)),
+        )
 
         const controller = new AbortController()
         timedOutRef.current = false
@@ -904,16 +980,26 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      // What is on screen may answer an older query than the one selected: the
+      // panel says which wait it is in instead of passing the old order off as
+      // the new one.
+      const currentKey = queryKey(sort, view)
+      const behind = state.data !== null && state.data !== undefined && state.dataQuery !== currentKey
+      const sortLabel = t((SORTS.find((entry) => entry.key === sort) ?? SORTS[0]).labelKey)
+
+      const kind = contentKind(rows, state)
       let content
-      if (state.phase === 'error') {
+      if (kind === 'table') {
+        content = h('div', { className: 'dsh-ms-wrap' }, h('table', { className: 'dsh-ms-table' }, header, body))
+      } else if (kind === 'error') {
         content = h(
           'div',
           { className: 'dsh-ms-empty', role: 'status' },
           t('error.body', { error: state.error }),
         )
-      } else if (state.phase === 'loading') {
+      } else if (kind === 'loading') {
         content = h('div', { className: 'dsh-ms-empty' }, t('loading.body'))
-      } else if (rows.length === 0) {
+      } else {
         content = h(
           'div',
           { className: 'dsh-ms-empty' },
@@ -924,18 +1010,29 @@ window.__ModuleLoader__.load({
               })
             : t('empty.nodata'),
         )
-      } else {
-        content = h('div', { className: 'dsh-ms-wrap' }, h('table', { className: 'dsh-ms-table' }, header, body))
       }
 
+      // A failure keeps the table and explains itself; a request still in flight
+      // for another query only needs to say that the order on screen is the one
+      // it already had. Both are announcements, neither replaces the rows.
       const alert =
-        state.phase === 'ready' && state.warning
-          ? h(
-              'div',
-              { className: 'dsh-ms-alert', role: 'status' },
-              t('warn.body', { warning: state.warning }),
-            )
-          : null
+        kind !== 'table'
+          ? null
+          : state.warning
+            ? h(
+                'div',
+                { className: 'dsh-ms-alert', role: 'status' },
+                behind
+                  ? t('warn.stale', { sort: sortLabel, warning: state.warning })
+                  : t('warn.body', { warning: state.warning }),
+              )
+            : behind
+              ? h(
+                  'div',
+                  { className: 'dsh-ms-alert dsh-ms-quiet', role: 'status' },
+                  t('status.updating', { sort: sortLabel }),
+                )
+              : null
 
       return h(
         'div',
@@ -994,6 +1091,12 @@ window.__ModuleLoader__.load({
           ),
         )
       },
+      // The state machine and the dictionaries, reachable from a repository
+      // test. This half is browser-only — no build step, so nothing imports it —
+      // and `tools/verify-panel-state.mjs` drives the registered section instead
+      // of describing it. The module loader reads `inject` and `apply` and
+      // ignores everything else.
+      __test__: { MESSAGES, contentKind, querySwitched, queryAnswered, queryFailed },
     }
   },
 })
