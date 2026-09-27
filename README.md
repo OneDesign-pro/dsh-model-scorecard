@@ -125,6 +125,12 @@ read exactly once per collector**, that a restart reuses the snapshot without
 reading a log, that a moved legacy corpus revision re-reads only legacy sessions,
 and that a long-budget warm pass completes the corpus.
 
+Row order has its own contract test in `tools/verify-sort-order.mjs`. A fixture
+can only catch a wrong sort basis if the two candidate bases disagree on it, so
+every discriminating fixture is also asserted to disagree: each of `ttft`, `speed`
+and the `errors` tie-break carries a case whose mean and median pick different
+winners, and the test fails if that stops being true rather than passing quietly.
+
 ## Usage
 
 **Panel:** Settings → «Скорость моделей» (see *Where to find it* above).
@@ -177,6 +183,7 @@ Or through the plugin manager, pointing `install_bundle` at this directory.
 
 ```bash
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
+node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last
 node tools/harness-real.mjs      # the same collector driven against this machine's real store
 node tools/verify-official.mjs   # field-by-field cross-check against sessionStats
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model
