@@ -41,11 +41,14 @@ and 8 tokens, so a single packed tool-call burst cannot inflate a model's averag
 Two surfaces, one collector, so they can never disagree:
 
 1. **Settings → «Скорость моделей»** — the visual panel. A sortable table of every
-   model (or provider) with median/p90 response time, median and max decode rate,
-   measurement confidence, model wall time, cache-hit rate and error count. Best
-   median response and best median decode are highlighted green. The last answer is
-   kept in the browser, so reopening the panel paints the table first and refreshes
-   behind it. There is a refresh button; no timer polls once the numbers are still.
+   model (or provider). By default it shows steps, median response time, median
+   decode rate and errors; the deeper figures (p90, max decode rate, measurement
+   confidence, model wall time, cache-hit rate, last seen) are one click away
+   behind «все метрики». Best median response and best median decode are
+   highlighted green. The last answer is kept in the browser, so reopening the
+   panel paints the table first and refreshes behind it, and the chosen sort,
+   view and column set are remembered. There is a refresh button; no timer polls
+   once the numbers are still.
 2. **The `model_stats` tool** — the same numbers as plain text for the agent.
 
 The panel's data comes from `GET /api/model-stats` (`?sort=&view=&provider=&limit=`)
@@ -118,8 +121,8 @@ and that a long-budget warm pass completes the corpus.
 **Agent tool** — registered globally:
 
 ```
-model_stats(sort: "ttft")            # fastest first token
-model_stats(sort: "speed")           # fastest decode
+model_stats(sort: "ttft")            # fastest median first token
+model_stats(sort: "speed")           # fastest median decode
 model_stats(sort: "errors")          # least stable first
 model_stats(view: "provider")        # aggregate by provider
 model_stats(provider: "deepseek-official", sinceMs: <epoch-ms>)
@@ -130,6 +133,9 @@ the fastest decode, and every model that produced errors.
 
 ### Reading the output
 
+- `sort: "ttft"` and `sort: "speed"` order rows by the same median the panel
+  shows in `ttft_med` / `tps_med`, so the first row of the table is the model the
+  arrow points at.
 - Prefer `tps_med` over `tps_mean`: throughput distributions are skewed.
 - A `-` for `tps` means no steps carried a usable stream span — the provider
   recorded no stream timing for that model, not that it was slow.
