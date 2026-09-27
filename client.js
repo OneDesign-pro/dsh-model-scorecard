@@ -211,22 +211,25 @@ window.__ModuleLoader__.load({
         key: 'name',
         align: 'left',
         label: (view) => (view === 'model' ? 'Модель' : 'Провайдер'),
-        cell: (row, ctx) =>
-          h(
+        cell: (row, ctx) => {
+          const full = ctx.view === 'model' ? row.model : row.provider
+          const short = ctx.view === 'model' ? shortLabel(row.model) : row.provider
+          return h(
             'div',
             { className: 'dsh-ms-model-inner' },
             h(
               'span',
-              {
-                className: 'dsh-ms-model-name',
-                title: ctx.view === 'model' ? row.model : row.provider,
-              },
-              ctx.view === 'model' ? shortLabel(row.model) : row.provider,
+              { className: 'dsh-ms-model-name', title: full },
+              short,
+              // The tooltip carries the full id for the mouse. A shortened label
+              // must not be the only thing everyone else can reach.
+              short === full ? null : h('span', { className: 'dsh-ms-sr-only' }, ` — ${full}`),
             ),
             ctx.view === 'model'
               ? h('span', { className: 'dsh-ms-provider', title: row.provider }, row.provider)
               : null,
-          ),
+          )
+        },
       },
       { key: 'steps', tier: 'core', base: 'num', label: 'шагов', cell: (row) => count(row.steps) },
       {
@@ -296,22 +299,32 @@ window.__ModuleLoader__.load({
     const css = `
 .dsh-ms-root { display:flex; flex-direction:column; gap:12px; padding:4px 0 16px; }
 .dsh-ms-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 16px; }
-.dsh-ms-title { font-size:15px; font-weight:600; color:var(--dsw-alias-label-primary); }
+.dsh-ms-title { margin:0; font-size:15px; font-weight:600; color:var(--dsw-alias-label-primary); }
 .dsh-ms-meta { font-size:12px; color:var(--dsw-alias-label-secondary); }
 .dsh-ms-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.dsh-ms-group { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .dsh-ms-chip { font:inherit; font-size:12px; padding:3px 9px; border-radius:999px; cursor:pointer;
+  touch-action:manipulation;
   border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-2);
   color:var(--dsw-alias-label-secondary); }
 .dsh-ms-chip:hover { border-color:var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); }
 .dsh-ms-chip[aria-pressed="true"] { border-color:var(--dsw-alias-brand-primary);
   color:var(--dsw-alias-brand-primary); }
 .dsh-ms-btn { font:inherit; font-size:12px; padding:4px 11px; border-radius:6px; cursor:pointer;
+  touch-action:manipulation;
   border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-2);
   color:var(--dsw-alias-label-primary); }
 .dsh-ms-btn:hover { border-color:var(--dsw-alias-border-l2); }
 .dsh-ms-btn[disabled] { opacity:.55; cursor:default; }
-.dsh-ms-wrap { overflow-x:auto; border:1px solid var(--dsw-alias-border-l1); border-radius:8px;
-  background:var(--dsw-alias-bg-layer-1); }
+/* The host theme has no focus token for these controls, so draw the ring
+   explicitly. An outline rather than a shadow: the table wrapper clips. */
+.dsh-ms-chip:focus-visible, .dsh-ms-btn:focus-visible { outline:2px solid var(--dsw-alias-brand-primary);
+  outline-offset:2px; }
+/* Visually hidden, still read: a shortened model id must not lose the full one. */
+.dsh-ms-sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0;
+  overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.dsh-ms-wrap { overflow-x:auto; overscroll-behavior:contain; border:1px solid var(--dsw-alias-border-l1);
+  border-radius:8px; background:var(--dsw-alias-bg-layer-1); }
 .dsh-ms-table { border-collapse:collapse; width:100%; font-size:12px; font-variant-numeric:tabular-nums; }
 .dsh-ms-table th, .dsh-ms-table td { padding:6px 10px; text-align:right; white-space:nowrap;
   border-bottom:1px solid var(--dsw-alias-border-l1); }
@@ -373,6 +386,10 @@ window.__ModuleLoader__.load({
       const timedOutRef = React.useRef(false)
       const retriesRef = React.useRef(0)
       const lastPendingRef = React.useRef(0)
+      // A background refresh is the panel talking to itself; only a refresh the
+      // user asked for is worth announcing.
+      const manualRef = React.useRef(false)
+      const [announce, setAnnounce] = React.useState('')
 
       // A failed request must not wipe the table. The host folds in the
       // background and answers early, so a single hiccup — or one dropped reply
@@ -389,6 +406,9 @@ window.__ModuleLoader__.load({
 
       const load = React.useCallback(
         async (signal) => {
+          const manual = manualRef.current
+          manualRef.current = false
+          if (manual) setAnnounce('Обновляю статистику…')
           setState((prev) => ({ ...prev, phase: prev.data ? 'refreshing' : 'loading', error: null }))
           try {
             const query = `?sort=${encodeURIComponent(sort)}&view=${encodeURIComponent(view)}`
@@ -398,6 +418,7 @@ window.__ModuleLoader__.load({
             if (data.ok === false) throw new Error(data.error ?? 'unknown error')
             writeCachedPayload(sort, view, data)
             setState({ phase: 'ready', data })
+            if (manual) setAnnounce('Статистика обновлена')
           } catch (error) {
             if (error && error.name === 'AbortError') {
               // A user-visible deadline, not an unmount: say so instead of
@@ -490,18 +511,25 @@ window.__ModuleLoader__.load({
       const toolbar = h(
         'div',
         { className: 'dsh-ms-bar' },
-        h('span', { className: 'dsh-ms-meta' }, 'Сортировка:'),
-        ...SORTS.map((entry) =>
-          h(
-            'button',
-            {
-              key: entry.key,
-              type: 'button',
-              className: 'dsh-ms-chip',
-              'aria-pressed': sort === entry.key,
-              onClick: () => chooseSort(entry.key),
-            },
-            entry.label,
+        // The visible "Сортировка:" is a caption, not a control label: the group
+        // carries the name so a screen reader hears one labelled group instead of
+        // a stray word followed by five buttons.
+        h(
+          'div',
+          { className: 'dsh-ms-group', role: 'group', 'aria-label': 'Сортировка' },
+          h('span', { className: 'dsh-ms-meta', 'aria-hidden': 'true' }, 'Сортировка:'),
+          ...SORTS.map((entry) =>
+            h(
+              'button',
+              {
+                key: entry.key,
+                type: 'button',
+                className: 'dsh-ms-chip',
+                'aria-pressed': sort === entry.key,
+                onClick: () => chooseSort(entry.key),
+              },
+              entry.label,
+            ),
           ),
         ),
         h('span', { style: { flex: '1 0 auto' } }),
@@ -542,7 +570,11 @@ window.__ModuleLoader__.load({
           ...visible.map((column) =>
             h(
               'th',
-              { key: column.key, className: column.align === 'left' ? 'dsh-ms-left' : null },
+              {
+                key: column.key,
+                scope: 'col',
+                className: column.align === 'left' ? 'dsh-ms-left' : null,
+              },
               typeof column.label === 'function' ? column.label(view) : column.label,
             ),
           ),
@@ -589,7 +621,10 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: 'dsh-ms-btn',
             disabled: state.phase === 'loading' || state.phase === 'refreshing',
-            onClick: () => load(),
+            onClick: () => {
+              manualRef.current = true
+              load()
+            },
           },
           state.phase === 'refreshing' ? 'обновляю…' : 'Обновить',
         ),
@@ -599,7 +634,7 @@ window.__ModuleLoader__.load({
       if (state.phase === 'error') {
         content = h(
           'div',
-          { className: 'dsh-ms-empty' },
+          { className: 'dsh-ms-empty', role: 'status' },
           `Не удалось получить статистику: ${state.error}. Нажмите «Обновить», чтобы повторить.`,
         )
       } else if (state.phase === 'loading') {
@@ -633,10 +668,15 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'dsh-ms-root' },
         h('style', null, css),
+        // One channel for the async work the user started, so a background poll
+        // stays silent while a requested refresh is announced politely.
+        h('span', { className: 'dsh-ms-sr-only', role: 'status' }, announce),
         h(
           'div',
           { className: 'dsh-ms-head' },
-          h('span', { className: 'dsh-ms-title' }, 'Скорость и стабильность моделей'),
+          // The section label already names this panel in the host's navigation;
+          // inside the panel it is a heading, not decorative text.
+          h('h2', { className: 'dsh-ms-title' }, 'Скорость и стабильность моделей'),
           h(
             'span',
             { className: 'dsh-ms-meta' },
