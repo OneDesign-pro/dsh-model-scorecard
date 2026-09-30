@@ -112,9 +112,44 @@ console.log('\n=== edge cases ===')
 console.log('[limit clamp]', (await tool.execute({ limit: 999, sort: 'ttft' })).split('\n')[2])
 console.log('[bad sort]', (await tool.execute({ sort: 'nonsense' })).split('\n')[1])
 console.log('[sinceMs future]', (await tool.execute({ sinceMs: Date.now() + 1e12 })).slice(0, 90))
-console.log('[provider filter miss]', (await tool.execute({ provider: 'nope' })).slice(0, 90))
+console.log('[provider filter miss]', (await tool.execute({ provider: 'nope' })).split('\n').slice(0, 3).join('\n').slice(0, 200))
 console.log('[view=provider]')
 console.log((await tool.execute({ view: 'provider', limit: 5 })).split('\n').slice(0, 8).join('\n'))
+
+// The filter is the same question through two doors, so it is checked through
+// both: a comma-separated string, a JSON array, a repeated query parameter, and
+// the two spellings side by side. A route that filtered where the tool does not
+// is exactly the drift this panel was built to avoid.
+console.log('\n=== фильтр по провайдеру ===')
+const all = await tool.execute({ view: 'provider', limit: 50 })
+// A row starts with the provider and is followed by its numbers; the note lines
+// below the table start with a word and a number too, so a second column is what
+// tells a row from a sentence.
+const busiest = [...all.matchAll(/^(\S+)\s+(\d+)\s+\d+/gm)].map(([, provider, steps]) => [provider, Number(steps)])
+busiest.sort((a, b) => b[1] - a[1])
+const [first, second] = busiest.slice(0, 2).map(([provider]) => provider)
+console.log(`два самых занятых провайдера: ${first}, ${second}`)
+
+const byList = await tool.execute({ provider: `${first},${second}`, view: 'provider', sort: 'steps' })
+const byArray = await tool.execute({ provider: [first, second], view: 'provider', sort: 'steps' })
+const byRepeated = await callRoute(
+  `/api/model-stats?sort=steps&view=provider&provider=${first}&provider=${second}&limit=50`,
+)
+const byJoined = await callRoute(
+  `/api/model-stats?sort=steps&view=provider&provider=${encodeURIComponent(`${first},${second}`)}&limit=50`,
+)
+const listed = [...byList.matchAll(/^(\S+)\s+\d+\s+\d+/gm)].map(([match]) => match)
+console.log('[tool, строка] ', listed.join(' | '))
+console.log('[tool, массив]', byList === byArray ? 'тот же ответ' : 'ОТЛИЧАЕТСЯ')
+console.log('[route, двумя параметрами]', byRepeated.json.rows.map((row) => row.provider).join(' | '))
+console.log(
+  '[route, одним параметром]',
+  byJoined.json.rows.map((row) => row.provider).join(' | ') === byRepeated.json.rows.map((row) => row.provider).join(' | ')
+    ? 'тот же ответ'
+    : 'ОТЛИЧАЕТСЯ',
+)
+console.log('[панель предлагает провайдеров]', byRepeated.json.providerList.length, 'из', byRepeated.json.totals.providers)
+console.log('[после фильтра]', JSON.stringify(byRepeated.json.shown), '| применён:', byRepeated.json.providers.join('+'))
 
 console.log('\n=== panel route GET /api/model-stats ===')
 const panel = await callRoute('/api/model-stats?sort=ttft&view=model&limit=3')
@@ -130,4 +165,18 @@ for (const row of panel.json.rows) {
 }
 const bad = await callRoute('/api/model-stats?sort=bogus&limit=9999')
 console.log('fuzz (bad sort, huge limit):', 'status', bad.status, '| sort ->', bad.json.sort, '| rows', bad.json.rows.length)
+
+// The one order the fold cannot read off the session log: the status column's
+// verdict is a probe's, so the route reads the probe store and hands the rank in.
+console.log('\n=== порядок по статусу ===')
+const byStatus = await callRoute('/api/model-stats?sort=liveness&dir=desc&view=model&limit=20')
+const byStatusAsc = await callRoute('/api/model-stats?sort=liveness&dir=asc&view=model&limit=20')
+const show = (answer) =>
+  answer.json.rows
+    .map((row) => `${row.model ?? '(provider)'} ${row.liveness?.state ?? 'unknown'}`)
+    .join(' | ')
+console.log('status echoed:', byStatus.json.sort, byStatus.json.dir ?? '(null)')
+console.log('broken first  :', show(byStatus))
+console.log('available first:', show(byStatusAsc))
+console.log('tool rows unchanged by the panel-only order:', (await tool.execute({ sort: 'ttft', limit: 3 })).split('\n')[2])
 

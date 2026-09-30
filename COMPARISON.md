@@ -40,30 +40,34 @@ genTokensPerSec: perf.decodeMs > 0 ? (perf.decodeTokens / (perf.decodeMs / 1000)
 
 `sessionStats.decodeMs` spans **first token → `assistant/message`**. In an agent
 loop that interval also contains harness work between the last streamed token and
-message assembly, so dividing tokens by it is not a rate.
-
-Measured against the same history, decode-based vs streaming-span-based tok/s:
-
-| model | decode tok/s | span tok/s | inflation |
-|---|---|---|---|
-| limitdeckai/gpt-5.6-luna | 4125.1 | 28.3 | **146.0x** |
-| openrouter/stealth/space-bunny-alpha | 149.2 | 4.3 | 34.3x |
-| clinebot/cline-pass/minimax-m3 | 146.4 | 8.7 | 16.9x |
-| nvidia1/z-ai/glm-5.3 | 28.7 | 6.0 | 4.8x |
-| codex/gpt-5.6-sol | 142.9 | 34.8 | 4.1x |
-| clinebot/cline-pass/kimi-k3 | 48.2 | 43.1 | 1.1x |
-| deepseek-official/deepseek-flash | 266.4 | 257.1 | 1.0x |
-| splash/incoai/Qwen3.8-27B-Splash | 18.5 | 19.8 | 0.9x |
-
-The inflation is **not a constant factor**, so it cannot be corrected by
-calibration — it depends on how much non-streaming work each model does. Across
-the whole history the blended inflation is only 1.2x because `deepseek-flash`
-dominates the sum, which is exactly why a single global figure hides the problem.
+message assembly, so it is the weaker of the two bases — but only for the steps
+that actually had such work, and for most models that is almost none.
 
 `dsh-model-stats` reconstructs token arrival times from the recorded delta runs
-(`time0` + accumulated `dt`) and measures throughput over the span the provider
-was actually streaming. A span counts only when it carries ≥ 100 ms and ≥ 8
-tokens, and `speed_conf` reports what share of streamed steps qualified.
+(`time0` + accumulated `dt`) and measures over the span the provider was
+actually streaming. Re-measured on the same history with the corrected
+numerator, decode-based vs streaming-span-based tok/s:
+
+| model | decode tok/s | span tok/s | difference |
+|---|---|---|---|
+| limitdeckai/gpt-5.6-luna | 4125.1 | 821.2 | 5.0x |
+| codex/gpt-5.6-sol | 142.9 | 119.8 | 1.2x |
+| nvidia1/z-ai/glm-5.3 | 28.7 | 27.2 | 1.1x |
+| openrouter/stealth/space-bunny-alpha | 144.4 | 143.3 | 1.0x |
+| codex/gpt-6-sol | 147.2 | 142.5 | 1.0x |
+| clinebot/cline-pass/minimax-m3 | 146.4 | 147.7 | 1.0x |
+| deepseek-official/deepseek-flash | 267.2 | 270.8 | 1.0x |
+| splash/incoai/Qwen3.8-27B-Splash | 18.3 | 20.6 | 0.9x |
+
+So the earlier claim of a 34–146x "inflation" was **an artifact of the
+numerator, not of the interval**: that version of the plugin divided
+*delta fragments* by the streaming span and compared the result against
+*output tokens* over the decode interval. Both models that looked inflated are
+ones that batch their deltas. The two bases now agree to within 10% for every
+model except `limitdeckai/gpt-5.6-luna`, which is measured on 4 steps.
+
+A span counts only when it carries ≥ 100 ms, ≥ 8 tokens and ≥ 4 fragments, and
+`speed_conf` reports what share of streamed steps qualified.
 
 ## 3. Correctness of the shared metrics
 
@@ -109,8 +113,8 @@ pass — which is what lets it attribute every figure to a model.
   the only one of the two that can answer it, and the only one whose throughput
   figure survives contact with the data.
 - **Ignore the health card of `dsh-usage-vendor-stats`** for model selection: the
-  `avgTtftMs` is blended across all models and `genTokensPerSec` can be off by two
-  orders of magnitude.
+  `avgTtftMs` is blended across all models, and a single global
+  `genTokensPerSec` is dominated by whichever model has the most steps.
 - `dsh-model-health` stays as the secondary on-demand probe, untouched by both.
 
 ## Reproduce
@@ -119,4 +123,5 @@ pass — which is what lets it attribute every figure to a model.
 node model_stats/tools/harness.mjs      # drive the plugin against real logs
 node model_stats/tools/verify-official.mjs   # cross-check against sessionStats
 node model_stats/tools/per-model-speed.mjs   # decode vs span throughput per model
+node model_stats/tools/verify-tokens-per-fragment.mjs  # tokens, not stream fragments
 ```

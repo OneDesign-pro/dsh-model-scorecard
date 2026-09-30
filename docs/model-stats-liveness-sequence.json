@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Проверка живости моделей: один проход",
+    "output": "docs/model-stats-liveness-sequence.html",
+    "viewBox": [1350, 545],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    { "id": "panel", "type": "frontend", "label": "Панель в Plugins" },
+    { "id": "route", "type": "backend", "label": "API-маршруты" },
+    { "id": "liveness", "type": "backend", "label": "Проверка живости" },
+    { "id": "disk", "type": "database", "label": "liveness.json" },
+    { "id": "llm", "type": "backend", "label": "ctx.llm" },
+    { "id": "provider", "type": "external", "label": "Провайдер" }
+  ],
+  "segments": [
+    { "from": 150, "to": 260, "label": "Запуск" },
+    { "from": 270, "to": 400, "label": "Проба" },
+    { "from": 410, "to": 456, "label": "Опрос" }
+  ],
+  "messages": [
+    { "id": "post-check", "from": "panel", "to": "route", "y": 160, "label": "POST /liveness/check", "variant": "emphasis" },
+    { "id": "start", "from": "route", "to": "liveness", "y": 188, "label": "start(provider, all)", "variant": "default" },
+    { "id": "pending", "from": "liveness", "to": "route", "y": 216, "label": "pending: N", "variant": "return" },
+    { "id": "accepted", "from": "route", "to": "panel", "y": 244, "label": "200: проверка идёт", "variant": "return" },
+    { "id": "probe", "from": "liveness", "to": "llm", "y": 272, "label": "проба: 4 воркера, 15 с", "variant": "emphasis" },
+    { "id": "real-call", "from": "llm", "to": "provider", "y": 300, "label": "реальный адаптер", "variant": "default" },
+    { "id": "stream", "from": "provider", "to": "llm", "y": 328, "label": "delta + finish", "variant": "return" },
+    { "id": "result-llm", "from": "llm", "to": "liveness", "y": 356, "label": "status, ms · source: llm", "variant": "return" },
+    { "id": "persist", "from": "liveness", "to": "disk", "y": 384, "label": "результаты проб", "variant": "dashed" },
+    { "id": "poll", "from": "panel", "to": "route", "y": 412, "label": "GET: pending > 0", "variant": "emphasis" },
+    { "id": "rows", "from": "route", "to": "panel", "y": 440, "label": "строки + кружки", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "panel", "from": 160, "to": 254, "type": "frontend" },
+    { "participant": "route", "from": 188, "to": 254, "type": "backend" },
+    { "participant": "liveness", "from": 188, "to": 394, "type": "backend" },
+    { "participant": "llm", "from": 272, "to": 362, "type": "backend" },
+    { "participant": "provider", "from": 296, "to": 332, "type": "external" },
+    { "participant": "disk", "from": 379, "to": 390, "type": "database" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Хост отвечает сразу",
+      "items": [
+        "POST возвращает pending, не дожидаясь проб",
+        "Панель следит за pending обычным GET",
+        "Сотня моделей — не один долгий запрос"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Проба — настоящий вызов",
+      "items": [
+        "ctx.llm: тот же адаптер и креды",
+        "Поток читается до терминального finish",
+        "HTTP-фолбэк — только для dormant-маршрутов"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Результат — факт с датой",
+      "items": [
+        "checkedAt переживает перезапуск",
+        "Более поздняя история отменяет неудачу",
+        "Свежесть 5 мин: второй клик докатывает проход"
+      ]
+    }
+  ]
+}

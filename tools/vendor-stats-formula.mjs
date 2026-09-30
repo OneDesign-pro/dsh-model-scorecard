@@ -1,7 +1,7 @@
 // Reproduce the dsh-usage-vendor-stats health formula on the same real history:
 //   avgTtftMs      = sum(sessionStats.ttftMs) / sum(ttftSteps)
 //   genTokensPerSec= sum(decodeTokens) / (sum(decodeMs)/1000)
-import { foldSession } from '../lib/fold.js'
+import { foldSession, SPEED_QUALIFICATION } from '../lib/fold.js'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -27,7 +27,10 @@ for (const dir of readdirSync(SESSIONS)) {
       providers.add(s.provider)
       if (s.ttftMs !== null) { ttftMs += s.ttftMs; ttftSteps++; myTtft += s.ttftMs; mySteps++ }
       if (s.ttftMs !== null && s.outputTokens !== null) { decodeMs += s.decodeMs; decodeTokens += s.outputTokens }
-      if (s.streamMs && s.streamTokens && s.streamMs >= 100 && s.streamTokens >= 8) { mySpanMs += s.streamMs; mySpanTokens += s.streamTokens }
+      if (s.streamMs && s.streamTokens && s.streamFragments
+          && s.streamMs >= SPEED_QUALIFICATION.minSpanMs
+          && s.streamTokens >= SPEED_QUALIFICATION.minTokens
+          && s.streamFragments >= SPEED_QUALIFICATION.minFragments) { mySpanMs += s.streamMs; mySpanTokens += s.streamTokens }
     }
   }
 }
