@@ -1286,6 +1286,18 @@ by a message**. Switching the sort used to blank the table and, when that reques
 was slow, failed or was aborted by the next click, the rows did not come back on
 their own. The test fails on ten checks if that behaviour returns.
 
+What the package would *publish* has its own test, `tools/verify-tree.mjs`,
+because one defect in this tree was invisible to every behavioural check: two
+older copies of the liveness layer sat in `lib/`, and `package.json`'s `files`
+list ships that whole directory, so the tarball carried three implementations of
+a module the README says there is one of — while the panel worked, the numbers
+were right, and a grep for the liveness layer returned two plausible files. The
+test resolves every relative import, requires every module under `lib/` to be
+reachable from the two entry points, and refuses an editor leftover, an empty
+file and a module at the root other than `client.js`. It is the inventory the
+manual one was, run every time: the manual one found three of those four files
+and missed the fourth, which is the whole argument for the file.
+
 ## Usage
 
 **Panel:** Plugins → the `dsh-model-scorecard` bundle → its page (see *Where to find
@@ -1449,10 +1461,11 @@ node tools/harness-real.mjs      # the same collector driven against this machin
 node tools/verify-official.mjs   # field-by-field cross-check against sessionStats
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model
 node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragments
+node tools/verify-tree.mjs   # what the package ships: a reachable lib/, an import that resolves, no leftover
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-01, all sixteen green (`exit=0`):
+Counts as they stand on 2026-10-01, all seventeen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
@@ -1469,8 +1482,9 @@ Counts as they stand on 2026-10-01, all sixteen green (`exit=0`):
 | `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
 | `verify-probe-budget.mjs` | the deadline rule | 12 |
+| `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 920 counted assertions in the fourteen tools that print a count; the other
+That is 927 counted assertions in the fourteen tools that print a count; the other
 three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
