@@ -244,9 +244,14 @@ Two surfaces, one collector, so they can never disagree:
    sample size and recency, response latency and retries, throughput and its
    measurement coverage, errors and interruptions, then duration and input
    diagnostics. Thin dividers mark the groups without another sticky header.
-   Under the two headline medians every figure carries a hairline bar — its share
-   of the largest value in that column — so a column can be read down the page
-   without reading the digits. Best median response and best median decode are
+   Under the three rate medians — response, `tok/s e2e med` and `ош./100` — every
+   figure carries a hairline bar: its share of the largest value in that column, so
+   a column can be read down the page without reading the digits. Which columns are
+   scaled is the `SCALED` map in `client.js`: a cell draws a bar only for a metric
+   that pass measured, so `шагов` (a sample size, not a figure about the model) and
+   the two columns whose metric is deliberately absent (`ретраи`, `префилл` — see
+   D-028 in the local tech-debt list) draw none. `статус` is a column of words and
+   never had one. Best median response and best median decode are
    highlighted green, the worst of the shown rows red — the two ends come out of
    one ranking, so a row is never marked both ways, and a model with no
    measurement («-») is never marked as the slowest. The table lists what the
@@ -258,9 +263,9 @@ Two surfaces, one collector, so they can never disagree:
    so it reaches a screen reader too; the legend that spells all of this out sits
    folded under the table. The last answer is kept in the browser, so reopening
    the panel paints the table first and refreshes behind it, and the chosen sort,
-   direction, view, provider filter and column set are remembered — and written
-   into the address as well (see *The question in the address* below). There is a
-   refresh button; no timer polls once the numbers are still.
+   direction, view, selected models, archive and column set are remembered — in
+   `localStorage`, not in the address (see *The question the panel asks* below).
+   There is a refresh button; no timer polls once the numbers are still.
 2. **The `model_stats` tool** — the same numbers as plain text for the agent.
 3. **The `model_liveness` tool** — the availability check, from the agent's side.
 
@@ -418,16 +423,33 @@ Ways to run one:
 |---|---|
 | the circle in a row | that one model |
 | **Проверить все** | every configured model, re-probing even a fresh answer |
-| **Только устаревшие** | models with no answer, or one older than five minutes |
+| **Проверить выбранные** | the models ticked in the «Модели» tree, re-probing even a fresh answer |
 | a provider row in the provider view | that provider's models |
+
+The two buttons name their *scope* and each says what it costs in its own tooltip,
+because the difference between them is one real request per model. They used to be
+named for a *window* — «Только устаревшие», meaning "models with no answer, or one
+older than five minutes" — and that was the worse of the pair: the five-minute rule
+lives inside the host, so the button neither said what it would check nor let the
+reader predict the result, and pressing it on a table where everything was fresh
+did nothing at all. The scope of the second button is the reader's own selection,
+resolved over the catalog the host sent — the same resolution the tree's checkboxes
+are drawn from, so the button and the marks cannot disagree — and it is disabled
+while nothing is ticked. It travels as the pairs themselves rather than as the rule
+document, because a check is a question about models that exist: the host probes a
+named pair whether or not the catalog still lists it, and answers `NO_ROUTE` rather
+than dropping it, which would look like a green row. `POST /api/model-stats/liveness/check`
+takes `pairs: [{ provider, model }]` for that, capped at 1024 pairs, and keeps
+`provider` / `model` / `all` for the agent's own tool.
 
 A sweep is not one HTTP request. The host answers `POST` immediately, keeps
 probing in the background at four at a time, and the panel follows `pending`
 down to zero over the ordinary `GET` — so a check over a hundred models never
 becomes a request the browser gives up on. Results are written to `liveness.json`
-next to the fold snapshot and survive a restart; the five-minute freshness window
-means pressing **Только устаревшие** twice finishes an interrupted sweep instead
-of paying for the models the first press already answered.
+next to the fold snapshot and survive a restart. The five-minute freshness window
+still governs a *plain* catalog click — the agent's `model_liveness()` with no
+arguments, which is why its `staleOnly` parameter is documented as naming what a
+plain call already does — but no panel button depends on it any more.
 
 **A probe gets the patience its route has, not one this plugin invented.** The
 budget is resolved per model: the provider profile's own `timeoutMs` if it
@@ -461,33 +483,140 @@ FAIL   openrouter         google/gemma-4-31b-it:free   526     llm  RATE_LIMIT 4
 ### Filtering by provider
 
 Both surfaces can answer about some providers instead of all of them. The names
-are exact, and several of them at once: `?provider=openrouter,codex` in a URL,
-the same string (or a JSON array) as the tool's `provider`, and a checkbox list
-in the panel. The panel's list is built from the **whole** history, not from the
-rows on screen — the rows are sorted, cut to the limit and already filtered, so
-they name a handful of the providers and the ones a filter exists to compare are
-exactly the ones missing.
+are exact, and several of them at once: `?provider=openrouter,codex` in a URL and
+the same string (or a JSON array) as the tool's `provider`. A filter that matched
+nothing is a question with an answer, not a reason to return the whole table: the
+text report names the names it was asked for, and the answer keeps every provider
+the report knows. The panel no longer has a provider checkbox list — the selection
+below replaced it, because "which providers" and "which models" are one question
+and the panel was asking it twice.
 
-The list is ordered **alphabetically by name**, not by traffic. The host sends
-its provider list busiest first, and that is the right order for reading a
-ranking and the wrong one for finding a checkbox: the list mixes providers of
-very different volumes, so a name moves between two answers and has to be hunted
-for again. Each row still carries its own step count, where it explains the list
-without ordering it.
+### Choosing the models the table is about
 
-Three things about it are deliberate:
+The panel's table is about the models the reader selected, and the selection is a
+**rule**, not a list of pairs. The difference shows the morning after: under "all
+of this provider" a model the configuration gained overnight appears in the next
+answer, while a list of names captured yesterday would not name it and would leave
+it out of a provider the reader had marked as complete. What the panel sends to the
+host is the rule document, and what the host does with it is resolve it against the
+catalog only the host can see in full.
 
-- **The filter is hidden in the provider view.** A row there already is a
-  provider, so a filter could only ever leave one row. The selection is kept
-  rather than thrown away and is sent again on the return to the model view.
-- **The answer keeps every provider the report knows.** A filter that matched
-  nothing is a question with an answer, not a reason to return the whole table:
-  the panel says so and the text report names the names it was asked for.
-- **A switch never takes the table off the screen.** It is the same contract the
-  sort has, and the notice about a stale answer names the filter as well as the
-  sort, so a table of every provider is not read as a table of the selected
-  ones. The footer adds what the filter left of the history, since the totals
-  beside it are the whole history by design.
+A rule has two scopes, `live` and `archive`, and each scope three levels:
+
+| Level | What it says |
+|---|---|
+| `base` | `measured` (every model with history), `all`, or `none` |
+| `providers[name]` | `all`, `measured` or `none` for one provider |
+| `pairs["provider\u0000model"]` | `on` or `off` for one model — the exception that outranks both |
+
+Precedence is exactly that order, top to bottom: an explicit pair first, then the
+provider's rule, then the scope's base. A first open uses
+`{ live: { base: 'measured' }, archive: { base: 'none' } }` — every model that has
+history and no retired one, which is the set the table showed before a selection
+existed, so nothing changes for a reader who never opens the tree.
+
+`providers[name]: "measured"` says *everything of this provider that the history has
+run*, and it is a rule rather than the list of the pairs that happen to be measured
+for the same reason the rest of the document is: a model the provider gains and that
+is run for the first time joins it by itself. A provider whose every model has been
+run resolves it to `all`, so on such a provider it is the same set twice and the tree
+says so with a `data-state="measured"` and a tooltip rather than with a difference
+the reader cannot see.
+
+Two scopes are one statement about two kinds of item: a model outside the
+configuration is not a model inside it, and a reader's marks about each are kept
+apart. While the archive is off its scope is stored and not applied, so switching
+the archive on brings the marks back instead of resetting them — and switching it on
+marks nothing by itself, because a scope nobody could see is not a scope a switch
+may edit.
+
+The tree is one compact line above the table — `Модели 3 из 5` — and the tree behind
+a disclosure: a search box, **Выбрать все** and **Снять все**, then one row per
+provider with its own checkbox and `N из M моделей` beside it, and its models
+indented under it, each labelled with its full id. Altogether the control has to
+answer four questions:
+
+- **What is selected now.** The count in the line, and the count beside each
+  provider row. A group whose models are partly selected is a real `indeterminate`
+  control *and* an `aria-checked="mixed"` *and* a number — the state is never
+  carried by colour alone, and a reader who cannot see a dash sees the number.
+- **What a click on a group means.** One click, three steps, and it is a cycle rather
+  than a descent. A group that is not full goes to *all* — a click has to be able to
+  finish what the reader started, and "all except the ones I excluded" is not a state
+  a parent checkbox can offer. A full group goes to *none*, which is the ordinary
+  meaning of clicking a ticked box. And a group the reader has just emptied comes
+  back as *only the models that have history*, which is the step a plain
+  "not all → all" cycle cannot reach: "nothing selected" is both "not all selected"
+  and "cleared", and only the rule says which of the two the reader last asked for.
+  From there the first step takes over again, so a provider whose models are half
+  measured walks *partial → all → none → measured-only → all* and stops being
+  ambiguous. A click on a group writes a rule about the provider, not a list of its
+  models, so a model it gains later follows it — including under the measured rule,
+  which is why the third step is one word in the document rather than a snapshot of
+  the pairs that were measured today.
+- **What a click on one model means.** An exception, written only where the reader's
+  wish differs from what the rules already say about that pair. Unticking one model
+  under "all of codex" stores one `off` exception; unticking it under "nothing
+  selected" stores nothing at all, because the entry would say what the rules
+  already say. Returning the tick removes the exception rather than writing the
+  opposite one, which is what keeps a saved policy readable.
+- **What the mass buttons act on.** Every item available under the current archive
+  state — and the search does not narrow that: the search hides rows to find a name
+  in, and a group action that silently acted on the visible subset would select a set
+  the reader cannot see. Searching changes no mark.
+
+**An empty selection is a state of its own.** The table says «Модели не выбраны»
+and offers the way back — «Вернуть выбор по умолчанию», which restores the rule a
+first open would have used. Clearing marks is «Снять все», and a button that says
+"back to the default" means the default. The reset is visible whenever the rules are
+not the default and inert while they are, and it does not turn the archive off: the
+archive is a scope switch with its own visible control, not one of the marks.
+
+**A selection larger than a page says so.** The panel asks for 200 rows, the host
+answers with `truncated: true` when the selection has more, and the panel prints how
+many rows were shown of how many and offers **Показать все** — which raises the page
+to the host's ceiling of 2000. A truncated table read as the whole selection is the
+one thing a table that lists what the reader chose must not do, so the notice is not
+optional and the limit is never silently applied.
+
+**The provider view does not drop the selection.** A provider row is a roll-up of
+the models the reader chose, and it says so: `1 из 2 моделей` beside the provider.
+That matters because the aggregate is computed from the selected raw measurements
+and not from ready model rows — see *A provider row is an aggregate of steps, not an
+average of medians* below — so a provider whose slowest model was left out reads
+faster than the provider, honestly and visibly.
+
+A switch to another selection is the same kind of question as a switch to another
+sort, and it has the same contract: it never takes the table off the screen, the
+footer adds what the selection left of the history (the totals beside it are the
+whole history by design), and the notice about a stale answer names the selection as
+well as the sort, so a table of every measured model is not read as a table of the
+selected ones.
+
+#### A provider row is an aggregate of steps, not an average of medians
+
+The selection is applied to the **raw measurements** — the folded steps, the error
+records and the retry records — *before* anything is aggregated. That is not an
+implementation detail; it is what a provider row means. An aggregate buckets what it
+is handed, so a selection that filtered ready model rows and then averaged them would
+compute a provider figure that is an average of medians: a model with one fast step
+would weigh as much as a model with a thousand, and the row would describe a
+distribution nothing ever measured.
+
+The fixture in `tools/verify-selection.mjs` is built so the two answers cannot be
+confused. One provider, two models: `one` has four steps around 100 ms, `two` has two
+around 900 ms. Selecting `two` alone gives a provider row of **2 steps and a 905 ms
+median** — its own measurements, the same numbers its model row shows. Averaging the
+two ready rows would have said **504 ms over two models**, a figure belonging to
+neither model and to no run of steps.
+
+The same rule decides what a *retry* counts as. A retry record folded from a step
+that never produced an answer carries the provider and no model of its own, because
+the fold refuses to guess a model across providers: it lands on the provider row,
+where the attribution is exact. Under a selection it follows its provider — it is a
+measurement of a provider whose models the reader is looking at — and it is dropped
+when none of that provider's models is selected, exactly as it is when no selection
+is on.
 
 ### Models outside the current configuration
 
@@ -498,8 +627,9 @@ of `(provider, model)` pairs the live `ctx.llm` serves, union the provider route
 the configuration files declare — and a row the configuration does not know is
 **archived**: hidden by default, listed on request.
 
-`archived: true` on the tool, `?archived=1` on the route, and the **archive**
-checkbox in the panel's filter bring those rows back. A row that is in the archive
+`archived: true` on the tool, `?archived=1` on the route, `"archived": true` on the
+panel's own route, and the **archive** checkbox inside the panel's model tree bring
+those rows back. A row that is in the archive
 wears the word `архив` / `archive` in the name column, so a table with the filter
 on says which of its rows are which; the filter chip and the footer count what the
 archive holds, and the empty state names it when the archive is why the table is
@@ -507,6 +637,15 @@ empty. The tool prints one `archive:` line naming the rows and steps it left out
 with the argument that brings them back — and its summary lines ("fastest first
 token") answer about the rows the table shows, so a retired model cannot be named
 the fastest model while being hidden from the table.
+
+That count is over the **whole history**, and not over the rows the selection kept.
+It is the number that tells a reader what switching the archive on would show, and
+the selection's first-open policy is `live: measured, archive: none` — a count
+taken off the selected rows therefore reads zero on a first open and keeps reading
+zero with the archive switched on and its models sitting in the tree unticked. The
+provider filter still narrows it, because that is a question about the history; the
+selection is a question about the table, and `archive.shown` is the half that
+follows the table.
 
 In the provider view a row is a provider, so it is graded as one: archived while
 the configuration serves no model of it at all. One configured model is all a row
@@ -525,10 +664,24 @@ rows and 15932 of 26600 steps — 60% of the history — would be archived, amon
 default model and is served by `dsh-llm-deepseek` without any provider block
 listing it. With the live catalog, 4 rows and 10 steps are.
 
-Like the provider filter, the archive is applied over the whole filtered set and
-before the limit, so a page of fifteen rows is fifteen rows the reader can use;
-`shown` in the payload counts the rows the grade kept, and `archive` says what
-that cost (`{ rows, steps, shown }`).
+The panel's **tree catalog** is graded by the same rule, because it is the list of
+what can be selected. A provider the configuration serves no model of has nothing
+but archived rows, so with the archive off its group could only ever answer an
+empty table; it leaves the tree with the rows that arm it, and the archive checkbox
+brings it back beside them. Measured on this machine against a catalog of 142 pairs
+over 16 providers, one name of the history's 16 is in that position: `wormsoft` (1
+model row, 3 steps, against those same 4 rows and 10 steps), which the tree offers
+again — 16 names without the archive, 17 with it.
+`local-uns` is the case that stays although two of its three rows are retired:
+`Ornith-1.5-9B-MLX-8bit` is configured, so the provider is reachable, and a
+provider the history has never seen keeps its place for the same reason — the
+configuration serves it (`ollama`, 22 configured pairs, no history at all).
+Nothing was graded under `archive: null`, so nothing left the list either.
+
+Like the selection, the archive is applied over the whole selected set and before
+the limit, so a page of fifteen rows is fifteen rows the reader can use; `shown` in
+the payload counts the rows the grade kept, and `archive` says what that cost
+(`{ rows, steps, shown }`).
 
 ### Models the configuration serves and the history has not seen
 
@@ -607,6 +760,19 @@ fields a human name at all — a `meta` object in `package.json` is not part of 
 package manifest and nothing reads it. Like every other host-side change here,
 this one appears in the plugin list only after DSH restarts.
 
+The icon on that row and on the bundle page is the one field of the three that
+does *not* live in a locale file: `package.json` declares `"icon": "icon.svg"`, a
+path relative to the package root that the Host reads, contains within the package
+after `realpath` resolution, caps at 256 KiB and inlines as a data URL — the
+manifest field is documented in `@deepseek-ai/dsh-package-manifest`'s
+`DshPackageManifest.icon`, and SVG, PNG, JPEG and WebP are all accepted. A package
+without it draws the Host's generic glyph instead, which is what this plugin did
+until the mark was added. `icon.svg` is the panel's own signature at 36 px: three
+ascending rounded bars, the figure the table draws a bar under, so the list row and
+the table say the same thing. It is listed in `files` so a packed tarball carries it.
+Unlike the two locale fields the icon was picked up without restarting DSH, because
+the plugin metadata is re-read with the package.
+
 The panel is a contribution to a slot the Plugins page owns, not a section of its
 own: `@deepseek-ai/dsh-client-ui-plugin-manager` is listed in `dsh.client.inject`
 in `package.json`, so that page's browser half arrives first, and
@@ -617,27 +783,60 @@ page renders the entry only while the bundle is on, so switching the bundle off
 takes the table with it.
 
 The Plugins page keeps its navigation in the shell rather than the address bar,
-so the panel has no route of its own — but it does put its question in the
-address, under five namespaced keys: `msSort`, `msDir`, `msView`, `msProvider`
-and `msArchived`. Opening a URL that carries them opens that table, which is what
-makes a view shareable and bookmarkable; every other parameter on the page is
-left exactly as it was found. The panel writes them with
-`history.replaceState` — an address, not a trail of pages to go Back through —
-and only when the reader actually chooses something, never on open, so a panel
-nobody touched leaves the address alone. On open the address wins over the
-settings kept in `localStorage` (`dsh-model-stats:prefs:v1`), which remain the
-fallback for a plain visit.
+so the panel has no route of its own.
 
-The panel's data comes from `GET /api/model-stats`
-(`?sort=&dir=&view=&provider=&archived=&limit=`, where `dir` is `asc` or `desc`,
-`provider` is a comma-separated list and may also be repeated, `archived=1`
-asks for the archive and `limit` bounds the page at 200 rows — anything else,
-including its absence, is the default of hiding the archive and of a 50-row page,
-which is what a hand-written URL and the tool keep asking for) on the same host as
-the GUI. The panel always names `limit=200`
-because its table is the configured set and not only the history: see *Models the
-configuration serves and the history has not seen*.
-The route accepts every column key of the table (`steps`, `ttft`, `speed`,
+**The question the panel asks lives in `localStorage`, not in the address.** It
+used to be in the address, under five namespaced keys (`msSort`, `msDir`, `msView`,
+`msProvider`, `msArchived`), which made a table shareable as a link. The selection
+is what ended that: it is a *rule document* — "all of codex except the mini" — and a
+rule document in a query string is either truncated or spelled out in a place the
+host's page can read. Rather than have one surface remember half its question in
+one place and half in another, the whole question moved into the store: the sort,
+the direction, the view, the archive and the rules are one document under one
+versioned key, `dsh-model-stats:prefs:v2.selection`. Every parameter of the host's
+page is left exactly as it was found — the panel never writes the address at all,
+and a leftover `msSort` in a bookmark is ignored rather than half-honoured.
+
+The key carries its version because the shape changed: v1 held a flat list of
+provider names, which is not a rule and cannot say "everything of this provider
+except one model". A v1 store is migrated **once**, explicitly, when it is first
+read — its provider names become "all of this provider" rules under the default
+base, which is the same set of rows the old filter showed — and the old key is left
+where it is. An *empty* v1 list keeps meaning "no filter" and never "nothing
+selected": the panel that read it as an empty selection would open blank for
+everyone who never touched that control. A store the browser refuses (a locked-down
+profile) is not a reason to lose the panel: the selection lives in memory for the
+tab, and the panel says so beside the count.
+
+The panel's data comes from `POST /api/model-stats/query` on the same host as the
+GUI, with a JSON body:
+
+```json
+{
+  "sort": "ttft", "dir": "asc", "view": "model", "limit": 200, "archived": false,
+  "selection": {
+    "live":    { "base": "measured", "providers": { "codex": "all" }, "pairs": { "codex\u0000gpt-6-mini": "off" } },
+    "archive": { "base": "none", "providers": {}, "pairs": {} }
+  }
+}
+```
+
+`selection` is `null` for "no policy at all" (the question `GET` answers) and a rule
+document otherwise; a body that is not a JSON object, an unknown `sort`, a `dir`
+outside `asc`/`desc`, a `limit` outside 1-2000, a non-boolean `archived`, a
+malformed selection, a body over one megabyte or a method other than `POST` is
+**refused with 400/405/413** rather than answered with a different question — a
+host that half-reads a selection answers a question nobody asked, and the panel
+draws that answer under the reader's own controls.
+
+`GET /api/model-stats` (`?sort=&dir=&view=&provider=&archived=&limit=`, where `dir`
+is `asc` or `desc`, `provider` is a comma-separated list and may also be repeated,
+`archived=1` asks for the archive and `limit` bounds the page at 200 rows —
+anything else, including its absence, is the default of hiding the archive and of a
+50-row page) stays exactly as it was, for any client that predates the selection.
+The panel always names `limit=200` because its table is the configured set and not
+only the history: see *Models the configuration serves and the history has not
+seen*. Both routes accept every column key of the table (`steps`, `ttft`, `speed`,
 `errors`, `lastSeen`, `name`, `ttftP90`, `tpsMax`, `confidence`, `llm`, `cache`,
 `retry`, `ttftClean`, `e2e`, `prefill`, `overhead`, `errorRate`, `modelErrors`,
 `interrupted`, `liveness`), while the agent tool `model_stats` continues to use
@@ -645,6 +844,22 @@ its curated five-order enum. An order nobody knows falls back to `steps` rather
 than failing the request, and the answer echoes the order it really applied — the
 panel draws its arrow from that echo, so a host that predates a column cannot end
 up with a heading claiming an order its rows are not in.
+
+Four fields of the answer exist for the selection:
+
+| Field | What it is |
+|---|---|
+| `selection` | the rule document the host applied, canonical — `null` when the question carried none |
+| `catalog` | every model in scope with `{ model, archived, noStats, steps }`, for the tree |
+| `coverage` | per provider, `{ selected, total }` — what "N of M models" is read from |
+| `truncated` | `true` when the selection is larger than the page: the table is not the whole answer |
+
+`catalog` is built from the **unfiltered** report and the whole configuration, so it
+names the models the reader has not marked as well as the ones they have: a catalog
+read off the rows being sent could only ever offer what is already ticked. `totals`
+and `providerList` stay whole-history figures for the same reason — a total that
+moved with the selection would no longer be a total — while `shown` counts what the
+selection kept, before the page cut it.
 
 > The client half is registered when the page boots: after the plugin is first
 > installed or its `dsh.client` manifest changes — the `inject` list included —
@@ -718,9 +933,48 @@ models came out as two rows and `providers` counted models.
 
 The provider filter has its own contract test in `tools/verify-provider-filter.mjs`:
 one reading of it through the query string, the panel payload and the agent's
-text, plus the two properties the panel's control rests on — that `providerList`
-names the whole history rather than the rows on screen, and that `shown` counts
-what the filter left rather than the page the limit cut.
+text, plus the three properties it rests on — that `providerList` names the whole
+history rather than the rows on screen, that it drops the providers whose every
+row the archive holds and offers them again with the archive on, and that `shown`
+counts what the filter left rather than the page the limit cut.
+
+The selection has the other half of that, in `tools/verify-selection.mjs`. It is
+built on a corpus with the two shapes a selection is easy to get wrong about — two
+models of one provider, and one model id under two providers — and it asserts the
+aggregate against an **independent recomputation** from the raw samples and error
+records, medians included: a provider row for one selected model of a two-model
+provider reads 905 ms, which is that model's own median, where averaging the ready
+rows would have said 504 ms. Alongside it: the same model id under two providers
+stays two rows and selecting one leaves the other out; a provider-level retry record
+(with no model of its own) follows its provider while any of its pairs is selected
+and disappears when none is; an empty selection is an empty table and never the
+whole one; a rule about a provider picks up a model the configuration gained later
+while a narrow manual set does not; the catalog is complete whatever the sort and
+the limit; `shown` counts the selection and not the page; `coverage` marks a partial
+provider; and both routes are driven end to end for their schemas — `GET` unchanged,
+`POST` refusing a wrong selection with 400 rather than answering with the full
+table, and 405/413 for a wrong method and an oversize body.
+
+The last section of that file exists for a specific failure: the panel resolves the
+stored rules itself, over the catalog of its last answer, because a checkbox has to
+be drawn before the next answer arrives — and the host resolves the same rules over
+the catalog only it can see in full. Two implementations of one precedence is a
+drift this repository cannot afford, so the two are pinned against each other over
+one catalog and six rule documents, pairs and per-provider coverage both. That
+cross-check is what found the one place the two disagreed about a document missing
+its maps.
+
+`tools/verify-panel-state.mjs` drives the shipped panel through the tree itself: a
+first open asking for the default rule and nothing else, a partial provider drawn as
+an indeterminate control with a number beside it, a group click written as a rule
+and not as a list, one model under a provider-wide rule written as a single
+exception and removed again when the tick comes back, the mass buttons independent
+of the search, an empty selection and the way back from it, the selection surviving
+a closed tab, a v1 provider filter migrating into rules while an *empty* one keeps
+meaning "no filter", the archive returning the marks it holds, a request that failed
+keeping the table, an answer to the previous selection not being passed off as the
+current one, the truncation notice and the page it raises, and a browser that
+refuses to store anything still working in memory and saying so.
 
 Rows built from the configuration rather than from the log have their own test in
 `tools/verify-configured-rows.mjs`: that a pair with no history is a row of the
@@ -815,6 +1069,7 @@ Or through the plugin manager, pointing `install_bundle` at this directory.
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last, per-column keys, direction, the status order
 node tools/verify-provider-filter.mjs  # the provider filter: one reading of it everywhere
+node tools/verify-selection.mjs       # the selection: rules, catalog, and aggregates from selected steps only
 node tools/verify-configured-rows.mjs  # rows built from the configuration: what a pair with no history is, and in what order
 node tools/verify-panel-state.mjs # panel: a query switch never takes the rows off the screen, what the status circle may claim, and what it may not
 node tools/verify-liveness.mjs   # liveness against the real LLM stack: a probe reaches a provider and reports what it found
