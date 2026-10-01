@@ -18,7 +18,7 @@
 //
 // Usage: node tools/verify-sort-order.mjs
 
-import { aggregate, SPEED_QUALIFICATION, errorCategory, ERROR_CATEGORY_NAMES } from '../lib/fold.js'
+import { aggregate, comparatorFor, SPEED_QUALIFICATION, errorCategory, ERROR_CATEGORY_NAMES } from '../lib/fold.js'
 import { probeState, statusRank, statusRanker } from '../lib/status.js'
 
 let clock = 1_700_000_000_000
@@ -775,6 +775,112 @@ check(
   probeState(refused('p', 'm', 'TIMEOUT', 'no answer within 15000 ms')) === 'down' &&
     probeState(null) === 'unknown' && statusRank(null, null) === null,
   `no probe → ${probeState(null)}`,
+)
+
+// --- порядок по техническому рейтингу: единственный, у которого есть null ------
+//
+// The rating is the one column whose figure can be legitimately absent on a row
+// that is *measured everywhere else*: nine qualified steps are history, they are
+// drawn in every other column, and they are still not enough to publish a score.
+// The order therefore has to answer the question the other keys never face — what
+// to do with a row that has a value for the heading and no value for the figure —
+// and it answers it the way the fold answers every missing figure: bottom, in
+// both directions. A reversed order that promoted nine good samples above ten is
+// the failure this section exists to catch.
+//
+// `fast` and `slow` are both well past the evidence threshold, so the order
+// between them is the score itself; `unrated` has nine qualified steps and no
+// score. `pinned` is the tie-break fixture: two providers serving the same model
+// name with byte-identical evidence, so the scores are equal to the last bit and
+// only pair identity can order them.
+
+console.log('\n--- порядок по техническому рейтингу ---')
+
+const ratingSamples = []
+for (let index = 0; index < 12; index += 1) {
+  ratingSamples.push(span('p14', 'fast', 200, 1000, 8, { ttftMs: 1000, llmMs: 2100 }))
+  ratingSamples.push(span('p14', 'slow', 50, 1000, 8, { ttftMs: 8000, llmMs: 9100 }))
+}
+for (let index = 0; index < 9; index += 1) {
+  ratingSamples.push(span('p14', 'unrated', 200, 1000, 8, { ttftMs: 1000, llmMs: 2100 }))
+}
+
+/** The same rows, ordered off the rating fixture rather than the shared corpus. */
+const rowsForRating = (provider, sort, dir) =>
+  aggregate(ratingSamples.filter((entry) => entry.provider === provider), { sort, dir }).byModel
+const showScore = (row) =>
+  typeof row.rating?.score === 'number' ? row.rating.score.toFixed(1) : (row.rating?.reason ?? '-')
+
+const ratingRows = rowsForRating('p14', 'rating')
+const ratingReversed = rowsForRating('p14', 'rating', 'asc')
+const ratingByName = Object.fromEntries(ratingRows.map((row) => [row.model, row]))
+
+check(
+  'sort=rating ставит первой лучшую опубликованную оценку',
+  same(ratingRows, ['fast', 'slow', 'unrated']) &&
+    ratingByName.fast.rating.score > ratingByName.slow.rating.score,
+  `${names(ratingRows)} (${ratingRows.map((row) => showScore(row)).join(' / ')})`,
+)
+check(
+  'перевёрнутый порядок меняет местами оценённые, но не поднимает неоценённую',
+  same(ratingReversed, ['slow', 'fast', 'unrated']),
+  names(ratingReversed),
+)
+check(
+  'девять годных шагов видны во всех колонках и всё равно не дают оценки',
+  ratingByName.unrated.steps === 9 &&
+    ratingByName.unrated.rating.score === null &&
+    ratingByName.unrated.rating.reason === 'insufficient_samples' &&
+    ratingByName.unrated.rating.qualifiedSamples === 9,
+  `${ratingByName.unrated.steps} шагов, score=${ratingByName.unrated.rating.score}, reason=${ratingByName.unrated.rating.reason}`,
+)
+check(
+  'в строке без rating (старая свёртка) порядок не падает и держит её внизу',
+  (() => {
+    const legacy = { provider: 'p14', model: 'legacy' }
+    const rated = { provider: 'p14', model: 'rated', rating: { score: 50 } }
+    return (
+      comparatorFor('rating')(legacy, rated) > 0 &&
+      comparatorFor('rating', 'asc')(legacy, rated) > 0
+    )
+  })(),
+  `${comparatorFor('rating')({ provider: 'p14', model: 'legacy' }, { provider: 'p14', model: 'rated', rating: { score: 50 } })} / ${comparatorFor('rating', 'asc')({ provider: 'p14', model: 'legacy' }, { provider: 'p14', model: 'rated', rating: { score: 50 } })}`,
+)
+
+// Two providers, one model name, identical evidence — recorded `p16` first so a
+// stable sort preserving insertion order would answer the wrong way. The tie is
+// broken by pair identity, and the tie-break deliberately does not follow the
+// requested direction: reversing a table of equal scores must not reverse the
+// identity order under them.
+const TIE_TIME = 1_800_000_000_000
+const tieSamples = []
+for (const provider of ['p16', 'p15']) {
+  for (let index = 0; index < 12; index += 1) {
+    const step = span(provider, 'twin', 200, 1000, 8, { ttftMs: 1000, llmMs: 2100 })
+    step.time = TIE_TIME
+    tieSamples.push(step)
+  }
+}
+const tieDown = aggregate(tieSamples, { sort: 'rating' }).byModel
+const tieUp = aggregate(tieSamples, { sort: 'rating', dir: 'asc' }).byModel
+const tieLabel = (rows) => rows.map((row) => `${row.provider}/${row.model}`).join(' < ')
+check(
+  'равные оценки разводятся идентичностью пары, а не порядком вставки',
+  tieDown[0].rating.score === tieDown[1].rating.score &&
+    !Number.isNaN(tieDown[0].rating.score) &&
+    tieLabel(tieDown) === 'p15/twin < p16/twin' &&
+    tieLabel(tieUp) === 'p15/twin < p16/twin',
+  `${tieLabel(tieDown)} (score ${tieDown.map((row) => row.rating.score).join(' = ')}) / asc ${tieLabel(tieUp)}`,
+)
+
+const ratingCorpus = aggregate(ratingSamples, { sort: 'rating' })
+check(
+  'строка провайдера — pair_only, а не пересчёт и не среднее его моделей',
+  ratingCorpus.byProvider.length === 1 &&
+    ratingCorpus.byProvider[0].rating.score === null &&
+    ratingCorpus.byProvider[0].rating.reason === 'pair_only' &&
+    ratingCorpus.byModel.some((row) => typeof row.rating.score === 'number'),
+  `провайдер: ${ratingCorpus.byProvider[0].rating.reason}; моделей с оценкой: ${ratingCorpus.byModel.filter((row) => typeof row.rating.score === 'number').length}`,
 )
 
 console.log('')
