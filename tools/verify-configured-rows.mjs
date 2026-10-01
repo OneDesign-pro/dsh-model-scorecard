@@ -147,6 +147,18 @@ check(
   row.errors === 0 && row.toolErrors === 0 && row.interrupted === 0 && row.maxContextTokens === 0 &&
     row.retrySteps === 0 && row.retryFailedSteps === 0 && row.retryCodes.length === 0,
 )
+// The rating is on this row too, and its absence of evidence has to read as
+// absence: a configured pair nobody ran is `no_samples`, while the provider
+// roll-up - which has no single pair to rate - is `pair_only`. Neither is a zero
+// and neither is a score.
+check(
+  'пара без истории — `no_samples`, провайдерский свёрт — `pair_only`',
+  row.rating.score === null &&
+    row.rating.reason === 'no_samples' &&
+    row.rating.qualifiedSamples === 0 &&
+    unmeasuredRow('p', null).rating.reason === 'pair_only',
+  `модель → ${row.rating.reason}, провайдер → ${unmeasuredRow('p', null).rating.reason}`,
+)
 
 const base = payload({ view: 'model', configured })
 check(

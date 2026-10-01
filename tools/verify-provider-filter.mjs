@@ -7,13 +7,17 @@
 // и текст в ответе агенту разойдутся — а расхождение этих двух поверхностей
 // здесь и есть главный запрет.
 //
-// Два свойства проверяются отдельно, потому что на них держится сам фильтр в
+// Три свойства проверяются отдельно, потому что на них держится сам фильтр в
 // панели:
 //
 //   * `providerList` — полный список провайдеров истории, а не те, что попали
 //     в строки. Строки отсортированы, обрезаны лимитом и уже отфильтрованы;
 //     если список брать из них, фильтр не сможет предложить именно того
 //     провайдера, ради которого и открывается.
+//   * `providerList` под архивом — провайдер, у которого в архиве все строки,
+//     из списка уходит и возвращается вместе с ними, когда архив включён:
+//     у списка то же обещание, что у таблицы, — назвать того, до кого фильтр
+//     дотянется.
 //   * `shown` — что осталось от истории после фильтра, а не то, что влезло в
 //     страницу. Подвал панели печатает это рядом с итогами по всей истории,
 //     и молчаливый обмен одного на другое там недопустим.
@@ -196,7 +200,17 @@ check(
 check('архив не попал в «что осталось после фильтра»', hidden.shown.models === 2 && hidden.shown.steps === 6, JSON.stringify(hidden.shown))
 check('итоги всей истории не тронуты', hidden.totals.models === 4 && hidden.totals.steps === 16, JSON.stringify(hidden.totals))
 check('строка помечена архивной', hidden.rows.every((row) => row.archived === false))
-check('список провайдеров по-прежнему полный', hidden.providerList.length === 3, hidden.providerList.map((e) => e.provider).join(' | '))
+// The list is what the filter can reach, so the archive grades it too: `c` is
+// served by nothing the configuration knows, so every row it has is in the
+// archive — and a name that can only ever answer an empty table is not a filter,
+// it is a trap. `a` keeps its place although its busiest row is retired:
+// `a/a-second` is configured, and one live model is all a provider needs to be
+// worth offering.
+check(
+  'провайдер, у которого весь архив, уходит из списка фильтра',
+  hidden.providerList.map((entry) => entry.provider).join() === 'a,b',
+  hidden.providerList.map((e) => e.provider).join(' | '),
+)
 
 // The page is filled with rows the reader can use: the retired `a/fast` is the
 // busiest row in the history, so a limit applied before the grade would take
@@ -224,6 +238,15 @@ check(
     .join() === 'a-fast,c-rare',
   shown.rows.map((row) => `${row.model}:${row.archived}`).join(' | '),
 )
+// The one checkbox the list is graded by: the archive on, and the provider whose
+// every row is archived is offered again — beside the very rows it names, which
+// is the test of "the list names every provider a row could come from".
+check(
+  'с архивом провайдер возвращается в список',
+  shown.providerList.map((entry) => entry.provider).join() === 'a,b,c' &&
+    shown.rows.some((row) => row.provider === 'c'),
+  shown.providerList.map((e) => e.provider).join(' | '),
+)
 
 // The guard the whole feature stands on. A catalog built from the configuration
 // files alone is a partial picture of what the harness serves — measured on this
@@ -241,6 +264,13 @@ check(
   `archive=${JSON.stringify(partial.archive)}, строк ${partial.rows.length}`,
 )
 check('и не выдаёт метку за измерение', partial.rows.every((row) => row.archived === null))
+// Nothing was graded, so nothing was taken out of the filter either: the same
+// `archive: null` that withholds the control has to withhold its effect.
+check(
+  'неизвестная конфигурация не убирает из списка никого',
+  partial.providerList.map((entry) => entry.provider).join() === 'a,b,c',
+  partial.providerList.map((e) => e.provider).join(' | '),
+)
 check(
   'сборка индекса отличает частичный каталог от полного',
   configuredIndex(catalog([{ provider: 'a', model: 'a-second' }], false)) === null &&
