@@ -24,6 +24,7 @@ const { default: JsonlSessionPersistence } = await import(
 const { SessionQueryEngine } = await import(`${DSH}/dsh-session-query/lib/index.js`)
 const { default: SessionStore } = await import(`${DSH}/dsh-session/lib/index.js`)
 const { createCollector } = await import('../lib/collect.js')
+const { panelPayload } = await import('../lib/index.js')
 
 const argv = process.argv.slice(2)
 const argOf = (flag, fallback) => {
@@ -115,15 +116,44 @@ console.log(`  ${JSON.stringify(status.value)}\n`)
 const instant = await timed('fresh process: snapshotReport()', () =>
   reopened.snapshotReport({ sort: 'steps' }),
 )
-console.log(
-  `  rows=${instant.value === null ? 'null' : instant.value.report.byModel.length} ` +
-    `steps=${instant.value === null ? '-' : instant.value.report.steps}\n`,
-)
+if (instant.value === null) {
+  console.log(`  null — the snapshot could not answer for any session\n`)
+} else {
+  console.log(
+    `  rows=${instant.value.report.byModel.length} steps=${instant.value.report.steps} ` +
+      `covered=${instant.value.scanned}/${instant.value.totalSessions} ` +
+      `complete=${instant.value.complete} leftOver=${instant.value.skippedIds.length} ` +
+      `(uncovered=${instant.value.uncovered} changed=${instant.value.changed})\n`,
+  )
+}
 
 const memory = await timed('fresh process: snapshotSummary() (no I/O)', () =>
   reopened.snapshotSummary({ sort: 'steps' }),
 )
-console.log(`  rows=${memory.value === null ? 'null' : memory.value.report.byModel.length}`)
+// null here is the contract, not a failure: the in-memory phase answers only from
+// what this process folded itself, and a process that has just started has folded
+// nothing. The on-disk phase above is what serves it.
+console.log(
+  memory.value === null
+    ? `  null — this process folded nothing yet, so the in-memory phase declines (expected)`
+    : `  rows=${memory.value.report.byModel.length}`,
+)
+console.log()
+
+// The question the panel actually asks, on a host that has just started: the whole
+// phase chain, and what it cost against the cold pass printed above.
+const panelReader = createCollector(
+  { get: (name) => ctx.get(name), logger: { info: () => {}, warn: () => {} } },
+  { persist: true, cacheDir },
+)
+const panel = await timed('fresh process: panelPayload() (the phase chain)', () =>
+  panelPayload(panelReader, { sort: 'steps', view: 'model' }, { sort: 'steps', view: 'model' }),
+)
+console.log(
+  `  ok=${panel.value.ok} rows=${panel.value.rows?.length ?? 0} ` +
+    `steps=${panel.value.totals?.steps ?? '-'} complete=${panel.value.complete} ` +
+    `pending=${panel.value.pending} scanned=${panel.value.scanned}\n`,
+)
 
 await rm(cacheDir, { recursive: true, force: true })
 process.exit(0)

@@ -15,6 +15,7 @@
 // Usage: node tools/verify-budget.mjs
 
 import { createCollector, toPanelPayload } from '../lib/collect.js'
+import { panelPayload } from '../lib/index.js'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -65,29 +66,41 @@ const listCounts = { persistence: 0, query: 0 }
 function store(options = {}) {
   const size = options.size ?? SESSIONS
   const legacy = options.legacy ?? 0
-  // A legacy generation shares one corpus-wide revision, so touching any old log
-  // changes it for all of them.
+  // A legacy generation carries one corpus-wide hash behind its own file
+  // identity, so touching any old log moves that hash for all of them - and
+  // nothing else. Each session keeps its own identity, because the distinction
+  // between "some other log was written" and "this log changed" is the whole
+  // comparison: the real store carries 199 legacy sessions, and a rule that
+  // re-reads them all whenever any of them moves costs 199 reads to learn
+  // nothing about the one that did.
   let corpusHash = options.corpusHash ?? 'a'.repeat(64)
   const revisions = new Map()
   for (let index = 0; index < size; index += 1) {
     const id = `session-${index}`
     revisions.set(
       id,
-      index < legacy
-        ? `1:2:3:4:5:${corpusHash}`
-        : `1:${index}:3:4:5`,
+      index < legacy ? `1:${index}:3:4:5:${corpusHash}` : `1:${index}:3:4:5`,
     )
   }
 
   return {
     revisions,
+    addSession(id, revision) {
+      revisions.set(id, revision)
+    },
     bumpCorpus() {
       corpusHash = corpusHash === 'a'.repeat(64) ? 'b'.repeat(64) : 'a'.repeat(64)
       for (const [id, revision] of revisions) {
-        if (revision.endsWith(corpusHash === 'a'.repeat(64) ? 'b'.repeat(64) : 'a'.repeat(64))) {
-          revisions.set(id, `1:2:3:4:5:${corpusHash}`)
+        if (revision.includes(':' + 'a'.repeat(64))) {
+          revisions.set(id, revision.replace('a'.repeat(64), 'b'.repeat(64)))
         }
       }
+    },
+    // One session's own log moved: size, mtime and ctime all differ.
+    bumpFile(id) {
+      const revision = revisions.get(id)
+      if (typeof revision !== 'string') return
+      revisions.set(id, revision.replace(/^(\d+:\d+):3:4:5/, '$1:9:8:7'))
     },
     ctx: {
       get(name) {
@@ -246,20 +259,48 @@ console.log(`полный проход без бюджета занял бы ~${
   const warm = await reopened.collect({ budgetMs: 60000, sort: 'steps' })
   check('догрузка после снапшота не читает ничего', warm.provenance.readNow === 0, `readNow=${warm.provenance.readNow}`)
 
-  // A legacy corpus revision moves whenever any old log is written, so every
-  // legacy entry becomes unverifiable and must be re-read rather than trusted.
+  // The corpus-wide hash a legacy generation carries moves whenever *any* old log
+  // is written. It says nothing about the log behind an entry, so nothing may be
+  // re-read because of it: measured on this machine's real store on 2026-10-01,
+  // comparing whole revisions made 195 of 483 sessions read as changed while not
+  // one of their own logs had been written.
   fake.bumpCorpus()
   const moved = createCollector(fake.ctx, { persist: true, cacheDir })
   const afterMove = await moved.collect({ budgetMs: 60000, sort: 'steps' })
   check(
-    'смена legacy-ревизии перечитывает только legacy-сессии',
-    afterMove.provenance.readNow === 10,
+    'смена corpus-хеша не перечитывает ни одной сессии',
+    afterMove.provenance.readNow === 0,
     `readNow=${afterMove.provenance.readNow}`,
   )
+  const movedStatus = await moved.snapshotStatus()
+  check('смена corpus-хеша не ломает свежесть', movedStatus.fresh === true, JSON.stringify(movedStatus))
+  check('свежесть не выдаёт устаревший снимок', movedStatus.stale === 0, `stale=${movedStatus.stale}`)
+
+  // The same corpus, one legacy log of which really did change: exactly one read,
+  // named by its own file identity rather than by the generation it belongs to.
+  await moved.saveSnapshot()
+  fake.bumpFile('session-3')
+  // Asked before anything folds the change in, because a collector that has
+  // already re-read the session has, correctly, nothing left to report about it.
+  const looker = createCollector(fake.ctx, { persist: true, cacheDir })
+  const afterOneStatus = await looker.snapshotStatus()
+  check('статус называет изменившуюся сессию', afterOneStatus.mismatches.length === 1, JSON.stringify(afterOneStatus.mismatches))
+  check(
+    'названная сессия — именно изменившаяся, с обеими ревизиями',
+    afterOneStatus.mismatches[0]?.id === 'session-3' &&
+      afterOneStatus.mismatches[0]?.reason === 'changed' &&
+      afterOneStatus.mismatches[0]?.stored !== afterOneStatus.mismatches[0]?.current,
+    JSON.stringify(afterOneStatus.mismatches[0] ?? null),
+  )
+  check('изменившийся снимот не свеж', afterOneStatus.fresh === false, `fresh=${afterOneStatus.fresh}`)
+
+  const oneMoved = createCollector(fake.ctx, { persist: true, cacheDir })
+  const afterOne = await oneMoved.collect({ budgetMs: 60000, sort: 'steps' })
+  check('изменившийся legacy-лог перечитан ровно один', afterOne.provenance.readNow === 1, `readNow=${afterOne.provenance.readNow}`)
 
   // A current-format log that actually changed must be re-read too. The previous
   // pass is snapshotted first, so the only recorded change is this one log.
-  await moved.saveSnapshot()
+  await oneMoved.saveSnapshot()
   fake.revisions.set('session-39', '1:999:3:4:5')
   const changed = createCollector(fake.ctx, { persist: true, cacheDir })
   const afterChange = await changed.collect({ budgetMs: 60000, sort: 'steps' })
@@ -270,7 +311,70 @@ console.log(`полный проход без бюджета занял бы ~${
   )
 }
 
-// --- 6. a long-budget warm pass finishes a cold corpus on its own ------------
+// --- 6. the panel's phase choice, against a snapshot that is one log behind ---
+//
+// The panel answers cheapest-first: memory, then the on-disk snapshot, then a
+// bounded fold. The third phase used to be the only way to see a session the
+// snapshot had never heard of — `snapshotReport` returned null for the whole
+// corpus if even one session was uncovered, so one new conversation anywhere on
+// the machine cost a full re-read of every other log. This drives the real
+// phase choice over a corpus whose read count is exact.
+{
+  resetReads()
+  const phaseDir = await mkdtemp(join(tmpdir(), 'model-scorecard-phases-'))
+  const fake = store({ size: SESSIONS, legacy: 10 })
+
+  const cold = createCollector(fake.ctx, { persist: true, cacheDir: phaseDir })
+  await cold.collect({ budgetMs: 60000, sort: 'steps' })
+  await cold.saveSnapshot()
+
+  // One session the snapshot has never seen, and one whose log has since changed:
+  // the two cases the old contract refused to answer at all.
+  fake.addSession('session-new', '1:500:3:4:5')
+  fake.bumpFile('session-7')
+
+  const reader = createCollector(fake.ctx, { persist: true, cacheDir: phaseDir })
+  const status = await reader.snapshotStatus()
+  check('статус видит непокрытую сессию', status.uncovered === 1, `uncovered=${status.uncovered}`)
+  check('статус видит изменившуюся сессию', status.stale === 1, `stale=${status.stale}`)
+  check('непокрытая сессия названа', status.mismatches.some((m) => m.id === 'session-new' && m.reason === 'uncovered'), JSON.stringify(status.mismatches))
+  check('неполный снимот не объявлен свежим', status.fresh === false, `fresh=${status.fresh}`)
+
+  const before = totalReads()
+  const report = await reader.snapshotReport({ sort: 'steps' })
+  check('снапшот отвечает, хотя не покрывает корпус', report !== null && report.report !== undefined)
+  check('его ответ назван неполным', report?.complete === false, `complete=${report?.complete}`)
+  check('его ответ перечисляет остаток', report?.skippedIds?.length === 2, `skippedIds=${JSON.stringify(report?.skippedIds)}`)
+  check('остаток разделён на непокрытое и изменившееся', report?.uncovered === 1 && report?.changed === 1, `uncovered=${report?.uncovered} changed=${report?.changed}`)
+  check('отвечая из снапшота, ни один лог не прочитан', totalReads() === before, `чтений=${totalReads() - before}`)
+
+  const started = performance.now()
+  // A collector of its own, the way a restarted host would have one: the one above
+  // has already folded the snapshot's index into memory, and answering from memory
+  // is phase 1's right — an in-memory answer is a first paint that never claimed
+  // to have re-checked the store.
+  const panelReader = createCollector(fake.ctx, { persist: true, cacheDir: phaseDir })
+  const listingsBefore = listCounts.query
+  const payload = await panelPayload(panelReader, { sort: 'steps', view: 'model' }, { sort: 'steps', view: 'model' })
+  const payloadMs = performance.now() - started
+  check('полная фаза прочитала ровно остаток', totalReads() - before === 2, `чтений=${totalReads() - before}`)
+  check(
+    'полная фаза перечислила корпус ровно один раз — фаза догрузки переиспользовала листинг',
+    listCounts.query === listingsBefore + 1,
+    `list=${listCounts.query - listingsBefore}`,
+  )
+  check('полная фаза дала полный ответ', payload.complete === true, `complete=${payload.complete} pending=${payload.pending}`)
+  check('полный ответ считает весь корпус, включая догруженное', payload.totals?.steps === SESSIONS + 1, `steps=${payload.totals?.steps} ожидалось=${SESSIONS + 1}`)
+  check('в ответе есть строки', payload.rows.length > 0, `rows=${payload.rows.length}`)
+  // A full cold fold of this corpus would read 40 logs; the panel read the two it
+  // was missing. The budget is what makes the other case safe, and the wall clock
+  // is here to catch a regression that spends the whole corpus again.
+  check('полная фаза уложилась в бюджет', payloadMs < SESSIONS * PER_SESSION_MS, `${payloadMs.toFixed(0)} мс`)
+
+  await rm(phaseDir, { recursive: true, force: true })
+}
+
+// --- 7. a long-budget warm pass finishes a cold corpus on its own ------------
 {
   resetReads()
   const fake = store()
