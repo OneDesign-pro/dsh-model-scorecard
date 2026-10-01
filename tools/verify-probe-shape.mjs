@@ -112,5 +112,138 @@ check(
   `${refusedRow?.status} ${refusedRow?.code ?? ''} ${refusedRow?.error ?? ''}`.trim(),
 )
 
+// --- the pairs a caller named outright ----------------------------------------
+
+// The panel's second probe button sends the models the reader ticked, as pairs.
+// The contract this guards is that a named list is exactly those models and
+// nothing else: a sweep that widened to the catalog would spend a real request on
+// every configured route, and the reader would have no way to see that it had —
+// the circles of the models they did not pick are the ones that would change.
+{
+  const asked = []
+  const service = {
+    async listProviders() {
+      return ['stub']
+    },
+    async listModels() {
+      return ['m1', 'm2', 'm3']
+    },
+    async *stream(request) {
+      asked.push(`${request.provider}/${request.model}`)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  const snapshot = await livenessOver(service).check({
+    pairs: [
+      { provider: 'stub', model: 'm2' },
+      // A repeat of the same pair is one probe, not two: the list is a selection,
+      // and a selection holds a pair once.
+      { provider: 'stub', model: 'm2' },
+      // Neither of these is a pair this host can probe, and neither is a reason to
+      // refuse the pair that is.
+      { provider: 'stub' },
+      { model: 'm3' },
+      { provider: '', model: 'm3' },
+    ],
+  })
+  check(
+    'a named list probes exactly the pairs it names, once each',
+    JSON.stringify(asked) === JSON.stringify(['stub/m2']),
+    JSON.stringify(asked),
+  )
+  check(
+    'a malformed entry is skipped rather than refusing the list',
+    (snapshot.results ?? []).length === 1 && snapshot.results[0].model === 'm2',
+    JSON.stringify((snapshot.results ?? []).map((entry) => entry.model)),
+  )
+}
+
+// The list is not filtered against the catalog, because the catalog is what the
+// host serves right now and the reader named what they wanted checked: a pair the
+// configuration has since dropped is exactly the one worth asking about, and its
+// answer is a code rather than silence.
+{
+  const asked = []
+  const service = {
+    async listProviders() {
+      return ['stub']
+    },
+    async listModels() {
+      return ['m1']
+    },
+    async *stream(request) {
+      asked.push(request.model)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  const snapshot = await livenessOver(service).check({
+    pairs: [{ provider: 'stub', model: 'gone-from-the-catalog' }],
+  })
+  const goneRow = (snapshot.results ?? [])[0]
+  check(
+    'a named pair outside the catalog is still probed',
+    JSON.stringify(asked) === JSON.stringify(['gone-from-the-catalog']),
+    JSON.stringify(asked),
+  )
+  // The stub serves every model it is asked for, so the verdict here is `ok`; what
+  // matters is that the pair came back as a recorded answer at all. A sweep that
+  // had dropped the pair would leave the store empty, and the reader would be told
+  // "already checked" about a model nothing had asked.
+  check(
+    'and the pair comes back as a recorded answer rather than silence',
+    goneRow?.status === 'ok' && goneRow.model === 'gone-from-the-catalog',
+    JSON.stringify(goneRow?.status),
+  )
+}
+
+// A named list is a question, so it is re-probed even when a fresh answer exists:
+// the freshness window belongs to the plain catalog click, and a reader who names
+// the models is asking for them now.
+{
+  let probes = 0
+  const service = {
+    async listProviders() {
+      return ['stub']
+    },
+    async listModels() {
+      return ['m1']
+    },
+    async *stream() {
+      probes += 1
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  const liveness = livenessOver(service)
+  await liveness.check({ pairs: [{ provider: 'stub', model: 'm1' }] })
+  await liveness.check({ pairs: [{ provider: 'stub', model: 'm1' }] })
+  check('a named pair is probed again despite a fresh answer', probes === 2, `probes: ${probes}`)
+}
+
+// The cap is the one thing a long list is refused for. It is a real bound rather
+// than a formality: every pair is a real request, and a sweep of thousands of them
+// is a mistake the host answers instead of paying for.
+{
+  const many = Array.from({ length: 1025 }, (unused, index) => ({ provider: 'stub', model: `m${index}` }))
+  const service = {
+    async listProviders() {
+      return ['stub']
+    },
+    async listModels() {
+      return ['m1']
+    },
+    async *stream() {
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  }
+  const refusedLong = await livenessOver(service)
+    .check({ pairs: many })
+    .then(() => null, (error) => error)
+  check(
+    'an oversized named list is refused, and says why',
+    refusedLong instanceof Error && refusedLong.message.includes('at most 1024'),
+    String(refusedLong?.message),
+  )
+}
+
 console.log(`\n${failures === 0 ? 'ALL OK' : `${failures} FAILED`}`)
 process.exit(failures === 0 ? 0 : 1)
