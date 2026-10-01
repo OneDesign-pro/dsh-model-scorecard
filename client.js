@@ -55,6 +55,10 @@ window.__ModuleLoader__.load({
       errorRate: 'desc',
       modelErrors: 'desc',
       interrupted: 'desc',
+      // The rating is a measurement like the rest — 0-100, higher is a route that
+      // delivered better here — so it opens at the good end, and the reader who
+      // clicks the heading is asking which pair to use rather than which to avoid.
+      rating: 'desc',
       // The one order that is not a measurement: the host ranks a row by how
       // loudly its status shouts (a row that cannot be run at all above one that
       // did not answer, above one out of allowance, above one that is fine) and
@@ -67,17 +71,12 @@ window.__ModuleLoader__.load({
       return dir === 'asc' ? 'desc' : 'asc'
     }
 
-    const DEFAULT_QUERY = { sort: 'ttft', dir: SORT_DIRS.ttft, view: 'model', providers: [], archived: false }
-
-    /**
-     * One boolean as the three places that spell it write it: `true` in the
-     * settings this browser kept, `1`/`true` in a hand-written URL, and the
-     * guest read back from either. Anything else is off — including the string
-     * `'0'`, which is a spelling of the default rather than of the filter.
-     */
-    function flagOf(value) {
-      return value === true || value === 1 || value === '1' || value === 'true'
-    }
+    // The question a panel with nothing remembered asks. It holds no selection: the
+    // rule a first open uses is the default rule document (`defaultSelectionRules`),
+    // which is a policy and not a list of pairs, and spelling it here as one more
+    // empty field would invite a caller to pass `[]` for "nothing selected" — the one
+    // reading this panel must never give that value.
+    const DEFAULT_QUERY = { sort: 'ttft', dir: SORT_DIRS.ttft, view: 'model' }
 
     // --- localized copy ----------------------------------------------------------
     // The panel follows the host's locale service: its dictionaries are registered
@@ -104,18 +103,31 @@ window.__ModuleLoader__.load({
         'view.models': 'по моделям',
         'view.providers': 'по провайдерам',
         'columns.all': 'все метрики',
-        'filter.label': 'Провайдеры',
-        'filter.all': 'все',
-        'filter.selection': '{selected} из {total}',
-        'filter.note': 'выбрано провайдеров: {selected} из {total}',
-        'filter.steps': 'шагов: {count}',
-        'filter.reset': 'Сбросить',
-        'filter.cap':
-          'Больше {max} провайдеров сразу не сравнить: снимите отметку, чтобы выбрать другого.',
-        'filter.empty': 'В истории пока нет ни одного провайдера.',
-        // The panel's own name for the whole group, since the group now holds two
-        // dimensions: the chip above it still names the provider half alone.
-        'filter.group': 'Фильтр',
+        'hint.columns.all':
+          'Показывает все столбцы, а не только основные: отклик p90, ош./100, tok/s max, «замер», llm / шаг, префилл, «наш оверхед», кэш, ретраи, «виден» и остальные. Нажмите ещё раз, чтобы вернуть краткий набор. Выбор запоминается и переживает перезагрузку страницы.',
+        'models.open': 'Модели',
+        'models.count': '{selected} из {total}',
+        'models.group': 'Выбор моделей',
+        'models.search': 'Поиск по провайдеру или модели',
+        'models.selectAll': 'Выбрать все',
+        'models.selectNone': 'Снять все',
+        'models.reset': 'Вернуть выбор по умолчанию',
+        'models.resetDefault': 'Вернуть выбор по умолчанию',
+        'models.empty': 'Ничего не найдено по этому запросу.',
+        'models.providerCount': '{selected} из {total} моделей',
+        'models.provider.measured':
+          'Правило провайдера «только измеренные»: выбраны те его модели, у которых есть история. Модель, которую запустят впервые, сама не появится.',
+        'models.note': 'выбрано моделей: {selected} из {total}',
+        'models.truncated': 'Показаны {shown} из {total} выбранных строк.',
+        'models.showAll': 'Показать все',
+        'models.storage':
+          'Браузер не разрешает сохранять данные: выбор действует, пока открыта вкладка, и не переживёт её закрытие.',
+        'models.unknownCatalog':
+          'Каталог этой установки прочитать не удалось: в дереве только то, что есть в истории, и архив не размечен.',
+        'empty.selection': 'Модели не выбраны.',
+        'empty.selected':
+          'У выбранных моделей нет замеров в истории: снимите отметку или выберите другую модель.',
+        'announce.selection.reset': 'Выбор моделей сброшен к выбору по умолчанию.',
         'filter.archive': 'архив: модели вне конфигурации',
         'filter.archive.short': 'архив',
         'filter.archive.count': 'штук: {count}',
@@ -140,10 +152,22 @@ window.__ModuleLoader__.load({
         'column.overhead': 'наш оверхед',
         'column.lastSeen': 'виден',
         'column.liveness': 'статус',
+        'column.rating': 'рейтинг',
         'probe.label': 'Проверка',
         'action.liveness.all': 'Проверить все',
-        'action.liveness.stale': 'Только устаревшие',
+        'action.liveness.selected': 'Проверить выбранные',
         'action.liveness.provider': 'Проверить провайдера',
+        // The two buttons used to be "check all" and "check the stale ones", and
+        // the second said nothing a reader could act on: what counted as stale was
+        // a five-minute window inside the host, and a button that skips what it
+        // cannot show is a button whose result cannot be predicted. Both halves now
+        // name their scope — the catalog, or the ticked models — and the tooltip
+        // says what each one costs, because the difference between them is one real
+        // request per model.
+        'hint.liveness.all':
+          'Опрашивает все настроенные модели, включая те, что проверены меньше пяти минут назад. Каждая проверка — настоящий запрос к модели тем же путём, что и работа: один короткий запрос, и зелёный кружок означает, что харнесс до модели дотягивается. Нажатие во время проверки ничего не делает — дождитесь окончания.',
+        'hint.liveness.selected':
+          'Опрашивает только те модели, что отмечены в дереве «Модели», — и повторно, даже если модель проверяли меньше пяти минут назад: нажатие просит именно эти модели прямо сейчас. Пустой выбор отключает кнопку: проверять нечего. Отдельную модель проверяет её кружок в столбце «статус».',
         'liveness.status': 'Доступность модели сейчас',
         'hint.liveness':
           'Живость модели: зелёный кружок — отвечает, серый — не проверялась, пульсирующий — проверка идёт. Отказ выглядит по-разному, и разница в том, чей это ход. Жёлтый кружок — провайдер отказал из-за лимита: запрос дошёл, квота кончилась или сработала частота, поэтому дело не в модели, а в паузе или в пополнении баланса. Сплошной красный — проверка не удалась, отвечать некому: таймаут, обрыв связи, ошибка провайдера. Красный квадрат — строка не настроена, и чинить надо у себя: «нет доступа» — ключ не принят или его нет, «нет маршрута» — у провайдера не объявлен адрес, «нет модели» — такой модели у провайдера нет. Клик по кружку проверяет одну эту модель: проверка идёт тем же путём, что настоящий запрос, поэтому зелёный кружок означает, что харнесс до модели дотягивается. Если модель отвечала в истории позже последней проверки, неудачная проверка считается устаревшей, и кружок зелёный с пометкой «по истории». Обстоятельства проверки — время последнего запроса, время и длительность проверки, код отказа — напечатаны под кружком в режиме «все метрики» и всегда лежат в подсказке на самом кружке. Отказ, который панель не смогла классифицировать, печатает в клетке свой статус строчными: «timeout», «server», «http_500». Заголовок «статус» сортирует строки по тому же, что нарисовано в кружках: сверху то, что чинить срочно (красный квадрат, потом красный кружок, потом жёлтый), ниже доступные, а в самом низу — не проверенные; второй клик по заголовку переворачивает порядок.',
@@ -179,7 +203,7 @@ window.__ModuleLoader__.load({
         'hint.errors':
           'Сколько раз запрос модели или её вызов инструмента закончились ошибкой за всю историю. Любое ненулевое значение подсвечено красным: это факт, а не сравнение с другими строками. Число включает ошибки запросов и вызовов инструментов за всю историю. Ненулевое значение подсвечивается красным. Подробности — коды и категории ошибок, а также число ошибок, вызванных моделью; ошибки гонки состояния файла означают изменение файла инструментом и не доказывают проблему модели.',
         'hint.errorRate':
-          'Число ошибок на 100 шагов: нормализовано по активности, в отличие от общего счётчика. Это не процент неудачных запросов и не оценка качества модели: за шаг бывает несколько ошибок, а сложность задач и причины отказов различаются. Число не равно доле неудачных запросов: один шаг может содержать несколько ошибок, а причины ошибок бывают у модели, провайдера или самого харнесса.',
+          'Число ошибок на 100 шагов: нормализовано по активности, в отличие от общего счётчика. Это не процент неудачных запросов и не оценка качества модели: за шаг бывает несколько ошибок, а сложность задач и причины отказов различаются. Число не равно доле неудачных запросов: один шаг может содержать несколько ошибок, а причины ошибок бывают у модели, провайдера или самого харнесса. Полоска под числом — доля от наибольшего значения в этом столбце; она намеренно серая, потому что сама по себе частота не винит ни модель, ни провайдера.',
         'hint.modelErrors':
           'Сколько ошибок вызвано самим выводом модели: она назвала инструмент или аргументы, которых нет, либо её код не запустился. Гонки состояния файла, отказы песочницы, ошибки провайдера и служебные ошибки харнесса сюда не входят — их сменой модели не вылечить. Это число ошибок, которые непосредственно вызваны выводом модели, а не внешними причинами. Ненулевое значение подсвечивается красным.',
         'hint.interrupted':
@@ -205,6 +229,44 @@ window.__ModuleLoader__.load({
         'hint.overhead':
           'Время шага, которое не является ни ожиданием первого токена, ни стримингом: пауза между последним фрагментом ответа и закрывающим событием. Это единственная колонка, где чинить — нам: всё остальное в таблице зависит от провайдера. По всей истории это около 2% времени модели, но оно собрано неравномерно — у большинства моделей единицы миллисекунд, у отдельных сотни. От 200 мс строка желтеет.',
         'hint.lastSeen': 'Когда модель отвечала в последний раз — по всем сессиям в истории.',
+        // The rating is the one column whose figure is a verdict rather than a
+        // reading, so its heading carries the whole rule: what is counted, what is
+        // thrown away, why an old measurement still counts, and what the mark next
+        // to the number means. It is also the paragraph the screen reader gets,
+        // which is why it is written as a sentence and not as a legend.
+        'hint.rating':
+          'Технический рейтинг этой пары провайдер–модель, 0–100. Учитывает скорость генерации, типичный и медленный отклик. Берётся вся история, а вес замера уменьшается вдвое за 30 дней относительно самого нового подходящего. Шаги с повторами и прерываниями исключены. Не оценивает интеллект, доступность, цену или размер контекста. Рейтинг публикуется от 10 подходящих замеров и помечается «~», пока эффективная выборка или число сессий малы, и «*», если самый новый подходящий замер старше 30 дней: оценка остаётся исторической и не пересчитывается от давности. «-» означает, что рейтинга нет — наведите курсор на число, чтобы прочитать причину.',
+        'rating.provisional': 'предварительная оценка: выборка мала',
+        'rating.stale':
+          'самому новому подходящему замеру больше 30 дней: это оценка по истории, а не по свежим данным',
+        'rating.scoreTitle':
+          '{score} из 100 по {qualified} подходящим замерам в {sessions} сессиях. Скорость и отклик этой пары в этой установке, а не качество ответов и не доступность сейчас.',
+        'rating.noSamples': 'рейтинга нет: в истории нет ни одного замера этой пары',
+        'rating.noQualified':
+          'рейтинга нет: ни один замер не прошёл проверку спана, токенов и фрагментов',
+        'rating.insufficient':
+          'рейтинга нет: подходящих замеров {qualified}, эффективных {effective} — для публикации нужно не меньше 10 и того, и другого',
+        'rating.pairOnly':
+          'Рейтинг считается для пары провайдер–модель, а эта строка — провайдер целиком. Переключитесь на вид «по моделям».',
+        'details.summary': 'Подробнее',
+        'details.rating': 'рейтинг {version}: {score} из 100',
+        'details.evidence':
+          'подходящих замеров {qualified} из {answered} ответов; исключено: {retried} с повторами, {interrupted} прерванных (могут пересекаться); эффективных {effective}; сессий {sessions}',
+        'details.anchor': 'вес падает вдвое за 30 дней; самый новый подходящий замер {ago}',
+        'details.measurements':
+          'взвешенные квантили, а не медианы столбцов: скорость {tps} tok/s, отклик {ttft}, отклик p90 {ttftP90}',
+        'details.factors': 'множители: скорость {throughput}, отклик {latency}, хвост {tail}',
+        'details.reference':
+          'маршрут объявляет · контекст: {context} · лимит ответа по умолчанию: {outputCap} · вход: {modalities} · reasoning: {reasoning}',
+        'details.reasoningDefault': '{efforts} — по умолчанию {defaultEffort}',
+        'details.referenceSource': 'источник: адаптер DSH, спрошен {ago}',
+        'details.referenceNone':
+          'сведения о маршруте недоступны: DSH ничего не отдал об этой паре',
+        'details.price': 'цена и квоты: {value}',
+        'details.priceUnknown': 'неизвестны — DSH не отдаёт единых тарифных и квотных данных',
+        'details.caution':
+          'Измерения зависят от размера запросов, режима reasoning и сети. Отсутствие повторов не доказывает отсутствие сетевой задержки.',
+        'details.unknown': 'не объявлено',
         'hint.noStats':
           'Модель есть в текущей конфигурации, но в истории сессий нет ни одного её шага: все измерения строки пусты, а «0» в столбце шагов — это замер, а не пропуск (шагов не было ни одного). Проверить модель можно кружком в столбце «статус»: проверка идёт тем же путём, что настоящий запрос, поэтому зелёный кружок означает, что харнесс до модели дотягивается. Такие строки стоят внизу таблицы, пока по ним нет ни одного измерения.',
         'noStats.badge': 'нет статистики',
@@ -250,11 +312,11 @@ window.__ModuleLoader__.load({
         'footer.noStats': 'без статистики: {count}',
         'legend.summary': 'Как читать таблицу',
         'note.core':
-          'Зелёным отмечены лучшие медианы, красным — худшие среди показанных строк. Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. Наведите курсор на заголовок столбца, чтобы прочитать, что он измеряет. Заголовок — кнопка сортировки: щёлкните, чтобы упорядочить строки по нему, ещё раз — чтобы развернуть порядок. Под откликом и tok/s нарисована полоска: доля значения от наибольшего в этом столбце. ',
+          'Зелёным отмечены лучшие медианы, красным — худшие среди показанных строк. Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. Наведите курсор на заголовок столбца, чтобы прочитать, что он измеряет. Заголовок — кнопка сортировки: щёлкните, чтобы упорядочить строки по нему, ещё раз — чтобы развернуть порядок. Под столбцами со шкалой — отклик, tok/s med, tok/s e2e med и ош./100 — нарисована полоска: доля значения от наибольшего в этом столбце. ',
         'note.extra':
-          '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. «кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала.',
+          '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. «кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала. «рейтинг» — техническая оценка пары: курсор на числе покажет, по скольким замерам он посчитан, а «Подробнее» под названием модели — из чего он сложился и что маршрут объявляет о себе: контекст, лимит ответа по умолчанию, вход и reasoning. «~» рядом с числом — выборка мала, «*» — последний подходящий замер старше 30 дней; то и другое объяснено в подсказке к числу.',
         'note.collapsed':
-          'Отклик p90, tok/s max, «замер», llm / шаг, «кэш» и «виден» — за кнопкой «все метрики».',
+          'Отклик p90, tok/s max, «замер», llm / шаг, «кэш», «виден» и ош./100 — за кнопкой «все метрики»; там же под названием модели появляется «Подробнее»: из чего сложился рейтинг и что маршрут объявляет о себе.',
       },
       en: {
         'panel.title': 'Model speed and stability',
@@ -267,16 +329,31 @@ window.__ModuleLoader__.load({
         'view.models': 'By Model',
         'view.providers': 'By Provider',
         'columns.all': 'All Metrics',
-        'filter.label': 'Providers',
-        'filter.all': 'all',
-        'filter.selection': '{selected} of {total}',
-        'filter.note': 'providers selected: {selected} of {total}',
-        'filter.steps': 'steps: {count}',
-        'filter.reset': 'Reset',
-        'filter.cap':
-          'More than {max} providers cannot be compared at once: clear one to pick another.',
-        'filter.empty': 'No provider in the history yet.',
-        'filter.group': 'Filter',
+        'hint.columns.all':
+          'Shows every column, not just the core ones: response p90, err/100, tok/s max, “meas.”, llm / step, prefill, our overhead, cache, retries, “seen” and the rest. Press it again to go back to the short set. The choice is remembered and survives a page reload.',
+        'models.open': 'Models',
+        'models.count': '{selected} of {total}',
+        'models.group': 'Model selection',
+        'models.search': 'Search by provider or model',
+        'models.selectAll': 'Select all',
+        'models.selectNone': 'Clear all',
+        'models.reset': 'Restore the default selection',
+        'models.resetDefault': 'Restore the default selection',
+        'models.empty': 'Nothing matches this search.',
+        'models.providerCount': '{selected} of {total} models',
+        'models.provider.measured':
+          'The provider is ruled “measured only”: the models selected are the ones the history has run. A model run for the first time will not appear by itself.',
+        'models.note': 'models selected: {selected} of {total}',
+        'models.truncated': 'Showing {shown} of {total} selected rows.',
+        'models.showAll': 'Show all',
+        'models.storage':
+          'The browser does not allow storing data: the selection lasts while this tab is open and will not survive closing it.',
+        'models.unknownCatalog':
+          'This installation’s catalog could not be read: the tree holds only what the history knows, and the archive is unmarked.',
+        'empty.selection': 'No models selected.',
+        'empty.selected':
+          'The selected models have no measurements in the history: clear a tick or pick another model.',
+        'announce.selection.reset': 'The model selection is back to the default.',
         'filter.archive': 'archive: models outside the configuration',
         'filter.archive.short': 'archive',
         'filter.archive.count': 'in it: {count}',
@@ -301,10 +378,15 @@ window.__ModuleLoader__.load({
         'column.overhead': 'our overhead',
         'column.lastSeen': 'seen',
         'column.liveness': 'status',
+        'column.rating': 'rating',
         'probe.label': 'Check',
         'action.liveness.all': 'Check All',
-        'action.liveness.stale': 'Check Stale Only',
+        'action.liveness.selected': 'Check Selected',
         'action.liveness.provider': 'Check Provider',
+        'hint.liveness.all':
+          'Probes every configured model, including the ones checked less than five minutes ago. Each check is a real request to the model over the same route real work takes: one short request, and a green circle means the harness itself can reach the model. Pressing it while a check is running does nothing — wait for that one to finish.',
+        'hint.liveness.selected':
+          'Probes only the models ticked in the “Models” tree, and probes them again even if one was checked less than five minutes ago: the press asks for exactly those models right now. An empty selection disables the button, because there is nothing to check. One model is checked by its own circle in the “status” column.',
         'liveness.status': 'Model availability right now',
         'hint.liveness':
           'Model liveness: a green circle answers, grey was never checked, a pulsing circle means a check is running. A refusal looks different, and the difference is whose move it is. Amber is the provider refusing on a limit: the request arrived and was refused on quota or rate, so the fix is a pause or a top-up, not another model. Solid red is a check that failed with nobody to answer it — a timeout, a dropped connection, a provider error. A filled red square is a row that is not configured, and the fix is on this side: “no access” means the key was refused or is missing, “no route” that the provider has no endpoint declared, “no model” that the provider does not know this model. Clicking a circle checks that one model: the check takes the same route a real request does, so a green circle means the harness itself can reach the model. When the model answered in history after the last check, a failed check is treated as stale and the circle is green, marked “from history”. What the check saw — last request, check time and latency, failure code — is printed under the circle in “all metrics” and always sits in the circle’s tooltip. A failure the panel cannot classify prints its own status in the cell, in lower case: “timeout”, “server”, “http_500”. The “status” heading sorts by exactly what the circles show: the rows to fix first on top (the red square, then the red circle, then amber), the available ones below them, and the never-checked at the very bottom; a second click on the heading turns the order around.',
@@ -340,7 +422,7 @@ window.__ModuleLoader__.load({
         'hint.errors':
           'How many times a request to this model, or one of its tool calls, ended in an error, over the whole history. Any non-zero value is red: that is a fact, not a comparison with the other rows. The count includes failed requests and tool calls across the whole history. Non-zero is red. Details include error codes and categories and whether the model caused them; a filesystem state race means a tool found that a file changed and does not by itself indicate a model fault.',
         'hint.errorRate':
-          'Error events per 100 steps, normalized for activity rather than a raw total. Not a failed-request percentage or a model-quality score: a step may have several errors, and task difficulty and causes differ. It is not a failed-request percentage or a model-quality score: one step can contain several errors, and causes include the model, provider and harness.',
+          'Error events per 100 steps, normalized for activity rather than a raw total. Not a failed-request percentage or a model-quality score: a step may have several errors, and task difficulty and causes differ. It is not a failed-request percentage or a model-quality score: one step can contain several errors, and causes include the model, provider and harness. The bar under the figure is its share of the largest value in the column, and it is grey on purpose: a rate alone blames neither the model nor the provider.',
         'hint.modelErrors':
           'How many errors were caused by the model’s own output: it named a tool or arguments that do not exist, or the code it wrote failed to run. Filesystem state races, sandbox denials, provider faults and harness bookkeeping are excluded — no change of model cures those. These are errors directly caused by the model’s output, rather than by external systems. Red when non-zero.',
         'hint.interrupted':
@@ -366,6 +448,38 @@ window.__ModuleLoader__.load({
         'hint.overhead':
           'Time in the step that is neither the wait for the first token nor the streaming: the gap between the last delta and the event that closed the step. This is the one column whose fix is on this side — everything else in the table belongs to the provider. Across this history it is about 2% of model time, but it is not spread evenly: units of milliseconds for most models, hundreds for a few. The row turns amber from 200 ms.',
         'hint.lastSeen': 'When the model last answered, across every session in the history.',
+        'hint.rating':
+          'Technical rating of this provider–model pair, 0–100. It weighs generation speed, typical response and slow response. All history, with a measurement’s weight halved every 30 days against the newest usable one. Retried and interrupted steps are excluded. It does not judge intelligence, availability, price or context size. A rating is published from 10 qualified measurements and marked “~” while the effective sample or the session count is small, and “*” when the newest usable measurement is over 30 days old: the score stays historical and is never recomputed from its age. “-” means there is no rating — hover the figure to read why.',
+        'rating.provisional': 'provisional: the evidence is thin',
+        'rating.stale':
+          'the newest usable measurement is over 30 days old: this is a historical score, not a fresh reading',
+        'rating.scoreTitle':
+          '{score} of 100 over {qualified} qualified measurements in {sessions} sessions. This pair’s speed and response in this installation, not answer quality and not reachability right now.',
+        'rating.noSamples': 'no rating: the history holds no measurement of this pair',
+        'rating.noQualified':
+          'no rating: no measurement passed the span, token and fragment gates',
+        'rating.insufficient':
+          'no rating: {qualified} qualified measurements, {effective} effective — 10 of each are needed to publish one',
+        'rating.pairOnly':
+          'A rating belongs to a provider–model pair, and this row is a whole provider. Switch to the model view.',
+        'details.summary': 'Details',
+        'details.rating': 'rating {version}: {score} of 100',
+        'details.evidence':
+          'qualified measurements {qualified} of {answered} answers; excluded: {retried} retried, {interrupted} interrupted (they may overlap); effective {effective}; sessions {sessions}',
+        'details.anchor': 'weight halves every 30 days; newest usable measurement {ago}',
+        'details.measurements':
+          'weighted quantiles, not the column medians: speed {tps} tok/s, response {ttft}, response p90 {ttftP90}',
+        'details.factors': 'multipliers: throughput {throughput}, response {latency}, tail {tail}',
+        'details.reference':
+          'the route declares · context: {context} · default output cap: {outputCap} · input: {modalities} · reasoning: {reasoning}',
+        'details.reasoningDefault': '{efforts} — default {defaultEffort}',
+        'details.referenceSource': 'source: DSH adapter, asked {ago}',
+        'details.referenceNone': 'no route information: DSH returned nothing about this pair',
+        'details.price': 'price and quotas: {value}',
+        'details.priceUnknown': 'unknown — DSH exposes no unified tariff or quota data',
+        'details.caution':
+          'Measurements depend on request size, reasoning mode and the network. The absence of retries does not prove the absence of network latency.',
+        'details.unknown': 'not declared',
         'hint.noStats':
           'The model is in the current configuration, but no session has ever run a step of it: every measurement in the row is empty, and the “0” in the steps column is a measurement rather than a gap (not one step was ever recorded). The circle in the “status” column is how to test it — the check takes the same route a real request does, so a green circle means the harness itself reaches the model. Such rows sit at the bottom of the table for as long as nothing about them has been measured.',
         'noStats.badge': 'no statistics',
@@ -410,11 +524,11 @@ window.__ModuleLoader__.load({
         'footer.noStats': 'without statistics: {count}',
         'legend.summary': 'How to read the table',
         'note.core':
-          'Green marks the best medians, red the worst among the rows shown. A “-” means the provider recorded no stream timing for that model, not that the model is slow. Hover a column heading to read what it measures. A heading is a sort control: click it to order the rows by that column, click it again to reverse the order. Under response and tok/s there is a bar: that value’s share of the largest one in the column. ',
+          'Green marks the best medians, red the worst among the rows shown. A “-” means the provider recorded no stream timing for that model, not that the model is slow. Hover a column heading to read what it measures. A heading is a sort control: click it to order the rows by that column, click it again to reverse the order. Under the columns that carry a scale — response, tok/s med, tok/s e2e med and err/100 — there is a bar: that value’s share of the largest one in the column. ',
         'note.extra':
-          '“meas.” is the share of steps whose span was long enough to be a reliable rate: a low value means the model mostly emitted very short bursts, so its tok/s is the least trustworthy number in the row. “cache” is the prompt-cache read share of input tokens. “seen” is when the model last answered.',
+          '“meas.” is the share of steps whose span was long enough to be a reliable rate: a low value means the model mostly emitted very short bursts, so its tok/s is the least trustworthy number in the row. “cache” is the prompt-cache read share of input tokens. “seen” is when the model last answered. “rating” is the pair’s technical score: a hover on the figure says how many measurements stand behind it, and the “Details” block under the model name says what it is made of and what the route declares about itself — context, default output cap, input and reasoning. “~” beside the figure means thin evidence and “*” that the newest usable measurement is over 30 days old; the figure’s own tooltip explains both.',
         'note.collapsed':
-          'Response p90, tok/s max, “meas.”, llm / step, “cache” and “seen” — behind the “all metrics” button.',
+          'Response p90, tok/s max, “meas.”, llm / step, “cache”, “seen” and err/100 — behind the “all metrics” button; there the model name also gains a “Details” block: what the rating is made of and what the route declares about itself.',
       },
     }
 
@@ -575,6 +689,18 @@ window.__ModuleLoader__.load({
     // whole set is asked for in one request instead, and the table scrolls.
     const PAGE_ROWS = 200
 
+    // The largest page the panel will ask for, and the host's own bound on one
+    // (`MAX_PANEL_ROWS` in `lib/collect.js`, which validates the request against
+    // it). The two are the same number for the same reason: a page the host would
+    // refuse is not a page, and a panel that asked for one would report a 400 as a
+    // failure to answer.
+    //
+    // Raising the page is what the reader's "show all" does when the selection does
+    // not fit on one page. It is bounded rather than unlimited on purpose — a
+    // selection is a set the reader built, but a set is still a set, and an
+    // unbounded page is an answer that cannot be sent.
+    const MAX_ROWS = 2000
+
     // The host bounds its own panel answer (PANEL_BUDGET_MS, 2.5 s in this tree)
     // and returns partial work, which the refresh loop then polls for. This
     // deadline is only the point where a host that is not answering at all
@@ -589,29 +715,44 @@ window.__ModuleLoader__.load({
     // shows the table at once instead of a spinner, then refreshes behind it.
     // The host folds in the background either way; this only removes the wait
     // from the first paint.
-    const STORE_KEY = 'dsh-model-stats:v1'
+    //
+    // Each version answers a question the previous one could not be asked. v2
+    // dropped the v1 entries because their keys named a provider filter and every
+    // one of them would have been a miss anyway. v3 drops the v2 entries because a
+    // payload written by a build that predates the rating column is a full answer
+    // about the same pairs with no rating in any row: the reader would open a table
+    // of dashes in a column every other install fills, and no field of that payload
+    // says which build wrote it. The version is the only place that can be said.
+    // Starting empty rather than keeping the dead entries costs nothing either: the
+    // store holds four, so they would be evicted by the first clicks anyway. The
+    // preference key is deliberately *not* bumped with it: which models the reader
+    // picked is their decision and outlives every one of these rewrites.
+    const STORE_KEY = 'dsh-model-stats:v3'
     const STORE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
     const REFRESH_INTERVAL_MS = 1500
     const MAX_REFRESHES = 20
 
     /**
-     * The identity of one query: `sort.dir|view|providers|archive`.
+     * The identity of one query: `sort.dir|view|selection|archive`.
      *
      * It names a cache entry and it labels the rows a payload answers. The panel
-     * needs the second job because a switch to another sort — or to another set
-     * of providers — has no answer yet, and what is on screen in the meantime
-     * belongs to a query the user is no longer asking for. The direction is part
-     * of the identity and not a detail of it: the same key in the other
-     * direction is a different table, and answering it from a cache entry that
-     * was stored the other way round would show rows in an order nobody asked
-     * for, under an arrow claiming that order. The provider part is empty for
-     * the unfiltered question, so the key of "every provider" stays readable
-     * rather than becoming a list of nothing — and the archive part is absent
-     * while the archive is off, so the default query keeps the key it had before
-     * this filter existed and a table cached by an older build is still a hit.
+     * needs the second job because a switch to another sort — or to another set of
+     * selected models — has no answer yet, and what is on screen in the meantime
+     * belongs to a query the user is no longer asking for. The direction is part of
+     * the identity and not a detail of it: the same key in the other direction is a
+     * different table, and answering it from a cache entry that was stored the other
+     * way round would show rows in an order nobody asked for, under an arrow
+     * claiming that order.
+     *
+     * The selection part is the canonical rule document, so two clicks that leave
+     * the rules saying the same thing are one cache entry — and the archive part is
+     * absent while the archive is off, so the default question keeps the key it had
+     * before the archive existed. A payload cached by a build that predates the
+     * selection is not a hit under any key: its rows answer a question about every
+     * measured model, which is not what the panel asks now.
      */
-    function queryKey(sort, dir, view, providers, archived) {
-      const base = `${sort}.${dir}|${view}|${normalizeProviders(providers).join(',')}`
+    function queryKey(sort, dir, view, selection, archived) {
+      const base = `${sort}.${dir}|${view}|${JSON.stringify(canonicalSelectionRules(selection))}`
       return archived === true ? `${base}|archive` : base
     }
 
@@ -628,8 +769,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function readCachedPayload(sort, dir, view, providers, archived) {
-      const entry = readCache()[queryKey(sort, dir, view, providers, archived)]
+    function readCachedPayload(sort, dir, view, selection, archived) {
+      const entry = readCache()[queryKey(sort, dir, view, selection, archived)]
       if (entry === null || typeof entry !== 'object') return null
       if (typeof entry.at !== 'number' || Date.now() - entry.at > STORE_MAX_AGE_MS) return null
       const data = entry.data
@@ -638,10 +779,10 @@ window.__ModuleLoader__.load({
       return data
     }
 
-    function writeCachedPayload(sort, dir, view, providers, archived, data) {
+    function writeCachedPayload(sort, dir, view, selection, archived, data) {
       try {
         const entries = readCache()
-        entries[queryKey(sort, dir, view, providers, archived)] = { at: Date.now(), data }
+        entries[queryKey(sort, dir, view, selection, archived)] = { at: Date.now(), data }
         // A handful of keys is enough for a session; old ones would only grow.
         const keys = Object.keys(entries)
         for (const key of keys.slice(0, Math.max(0, keys.length - 4))) delete entries[key]
@@ -651,21 +792,470 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // --- the selection ------------------------------------------------------------
+    //
+    // Which models the table is about, kept as a *rule* and not as a list of pairs.
+    //
+    // The difference matters in one direction, and it is the direction a reader
+    // notices: a rule survives the catalog changing under it. Under "all of this
+    // provider" a model the configuration gained overnight appears in the next
+    // answer, while a list of names captured yesterday would not name it and would
+    // leave it out of a provider the reader had marked as complete. So what travels
+    // to the host is the rule document below, and what the host does with it is
+    // resolve it against the catalog only the host can see in full.
+    //
+    // The panel resolves the same rules locally, against the catalog the last
+    // answer carried, for the one job the host cannot do for it: drawing the tree.
+    // A checkbox has to be drawn before the next answer arrives, and it is drawn
+    // from the same three-step precedence the host applies — an explicit pair, then
+    // the provider's rule, then the scope's base — because a tree that disagreed
+    // with the table under it would be worse than no tree at all.
+    //
+    // Two scopes, because the archive is one: a model outside the configuration is a
+    // different item from one inside it, and a reader's marks about each are kept
+    // apart. While the archive is off its scope is not applied but is still stored,
+    // so switching the archive on brings the marks back instead of resetting them.
+    const SELECTION_SCOPES = ['live', 'archive']
+    const SELECTION_BASES = ['measured', 'all', 'none']
+    // What one provider may be ruled as. The third value is a state of a click and
+    // not a fourth end: `measured` is where a group falls to from "nothing selected",
+    // and a group whose every model has been run resolves it to `all` — so its cycle
+    // has the two states the reader can tell apart, not three.
+    const SELECTION_PROVIDER_RULES = ['all', 'measured', 'none']
+    // The same bounds the route enforces, duplicated here the way the sort
+    // directions are: the panel has to be able to refuse a corrupt store before it
+    // sends it, and the host still checks what it receives. They are past any real
+    // catalog — the measured one is 137 pairs over 16 providers — so a store beyond
+    // them is corruption rather than a large install.
+    const MAX_SELECTION_PROVIDERS = 512
+    const MAX_SELECTION_PAIRS = 2048
+
+    function defaultSelectionRules() {
+      return {
+        live: { base: 'measured', providers: {}, pairs: {} },
+        archive: { base: 'none', providers: {}, pairs: {} },
+      }
+    }
+
+    /** `provider\u0000model`, the key one pair is identified by on both sides. */
+    function pairKeyOf(provider, model) {
+      return `${provider}\u0000${model}`
+    }
+
+    /**
+     * A resolved selection back as `{ provider, model }` pairs, for the one request
+     * that names models instead of asking for the catalog.
+     *
+     * The set is sorted so that the same selection always produces the same body:
+     * it is the request that decides which probes a sweep runs, and an order that
+     * moved between two presses of the same button would be an order nobody chose.
+     */
+    function pairsOf(pairs) {
+      return [...pairs]
+        .sort()
+        .map((key) => {
+          const cut = key.indexOf('\u0000')
+          if (cut === -1) return null
+          return { provider: key.slice(0, cut), model: key.slice(cut + 1) }
+        })
+        .filter((pair) => pair !== null)
+    }
+
+    /**
+     * The rules in one canonical spelling: sorted keys, one document per meaning.
+     *
+     * It is what the payload cache is keyed by, so two documents that mean the same
+     * thing must produce one key; and it is what the host echoes back, so a panel
+     * can tell an answer to the question it asked from an answer to another one.
+     */
+    function canonicalSelectionRules(rules) {
+      const source = rules !== null && typeof rules === 'object' ? rules : {}
+      const defaults = defaultSelectionRules()
+      const out = {}
+      for (const scope of SELECTION_SCOPES) {
+        const value = source[scope]
+        const entry = value !== null && typeof value === 'object' ? value : {}
+        const providers = {}
+        for (const name of Object.keys(entry.providers ?? {}).sort()) providers[name] = entry.providers[name]
+        const pairs = {}
+        for (const key of Object.keys(entry.pairs ?? {}).sort()) pairs[key] = entry.pairs[key]
+        out[scope] = {
+          base: SELECTION_BASES.includes(entry.base) ? entry.base : defaults[scope].base,
+          providers,
+          pairs,
+        }
+      }
+      return out
+    }
+
+    /**
+     * One scope of a stored or written rule document, typed, bounded and honest
+     * about having been bounded.
+     *
+     * The stop at the bound is a stop on *reading* and not a silent trim: `overflow`
+     * says the document held more than this panel is willing to read, and the caller
+     * then resets the scope rather than keeping an arbitrary prefix of it. Keeping the
+     * first thousand pairs and dropping the rest would answer a question about a set
+     * the reader never chose, with nothing on screen saying so — which is the one
+     * thing this panel must not do with a selection. The host refuses such a document
+     * outright (`normalizeSelectionRules` in `lib/collect.js` answers an error, and
+     * the route a 400), so a document this size never came from this panel.
+     */
+    function selectionScopeOf(value, fallbackBase) {
+      const scope = {
+        base: SELECTION_BASES.includes(value?.base) ? value.base : fallbackBase,
+        providers: {},
+        pairs: {},
+      }
+      let overflow = false
+      const providers = value?.providers
+      if (providers !== null && typeof providers === 'object' && !Array.isArray(providers)) {
+        for (const [name, rule] of Object.entries(providers)) {
+          if (!SELECTION_PROVIDER_RULES.includes(rule)) continue
+          if (name === '') continue
+          if (Object.keys(scope.providers).length >= MAX_SELECTION_PROVIDERS) {
+            overflow = true
+            break
+          }
+          scope.providers[name] = rule
+        }
+      }
+      const pairs = value?.pairs
+      if (pairs !== null && typeof pairs === 'object' && !Array.isArray(pairs)) {
+        for (const [key, rule] of Object.entries(pairs)) {
+          if (rule !== 'on' && rule !== 'off') continue
+          if (key === '' || key.indexOf('\u0000') <= 0) continue
+          if (Object.keys(scope.pairs).length >= MAX_SELECTION_PAIRS) {
+            overflow = true
+            break
+          }
+          scope.pairs[key] = rule
+        }
+      }
+      return { scope, overflow }
+    }
+
+    /**
+     * The rules the tree is drawn from, out of whatever the browser kept.
+     *
+     * A scope that was over its bound, or too large to read whole, is reset to its
+     * default rather than cut down to whatever fit: this panel would rather open on
+     * the rule a first visit uses than on a prefix of a set the reader chose and
+     * cannot see. The tree then shows what it did, and the reader's marks are one
+     * click away from being rebuilt.
+     */
+    function normalizeSelectionRules(value) {
+      const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
+      const defaults = defaultSelectionRules()
+      const rules = {}
+      for (const scope of SELECTION_SCOPES) {
+        const read = selectionScopeOf(source?.[scope], defaults[scope].base)
+        rules[scope] = read.overflow ? defaults[scope] : read.scope
+      }
+      return rules
+    }
+
+    /**
+     * The rules as the pairs they select, over one catalog.
+     *
+     * The precedence lives here, once, and its result is used for both jobs the
+     * panel has: drawing the tree, and counting what a provider's checkbox says.
+     * The host applies the same rule to the same catalog, and
+     * `tools/verify-selection.mjs` pins the two against each other.
+     */
+    function resolveSelection(rules, catalog) {
+      const scopeOf = (name, fallback) => {
+        const value = rules?.[name]
+        if (value === null || typeof value !== 'object') return null
+        return {
+          base: SELECTION_BASES.includes(value.base) ? value.base : fallback,
+          providers: value.providers ?? {},
+          pairs: value.pairs ?? {},
+        }
+      }
+      const live = scopeOf('live', 'measured')
+      const archive = scopeOf('archive', 'none')
+      const selected = new Set()
+      const providers = []
+      for (const group of Array.isArray(catalog) ? catalog : []) {
+        const models = Array.isArray(group?.models) ? group.models : []
+        let count = 0
+        for (const entry of models) {
+          const rule = entry.archived === true ? archive : live
+          let on
+          if (rule === null) {
+            on = entry.archived !== true && entry.noStats !== true
+          } else {
+            const exception = rule.pairs[pairKeyOf(group.provider, entry.model)]
+            if (exception === 'on') on = true
+            else if (exception === 'off') on = false
+            else {
+              const provider = rule.providers[group.provider]
+              if (provider === 'all') on = true
+              else if (provider === 'none') on = false
+              else if (provider === 'measured') on = entry.noStats !== true
+              else if (rule.base === 'all') on = true
+              else if (rule.base === 'none') on = false
+              else on = entry.noStats !== true
+            }
+          }
+          if (!on) continue
+          selected.add(pairKeyOf(group.provider, entry.model))
+          count += 1
+        }
+        providers.push({ provider: group.provider, selected: count, total: models.length })
+      }
+      return { pairs: selected, providers }
+    }
+
+    /** Whether two rule documents say the same thing, for the reset control. */
+    function sameSelectionRules(a, b) {
+      return JSON.stringify(canonicalSelectionRules(a)) === JSON.stringify(canonicalSelectionRules(b))
+    }
+
+    /**
+     * What the rules say about one pair when the reader has never touched it: the
+     * provider's rule, then the scope's base.
+     *
+     * Read by resolving the document with this pair's own exception removed, and
+     * that is not indirection for its own sake: under the `measured` base the answer
+     * is "the history has a step for it", which only the catalog knows. An
+     * individual click is then written down only when the reader's wish differs from
+     * this — so unticking one model under "all of this provider" stores one
+     * exception, while unticking it under "nothing selected" stores nothing at all.
+     */
+    function inheritedPairState(rules, scope, provider, model, catalog) {
+      const probe = canonicalSelectionRules(rules)
+      delete probe[scope].pairs[pairKeyOf(provider, model)]
+      return resolveSelection(probe, catalog).pairs.has(pairKeyOf(provider, model))
+    }
+
+    /** One model's checkbox as a rule change. */
+    function rulesWithPair(rules, scope, provider, model, on, inherited) {
+      const next = canonicalSelectionRules(rules)
+      const key = pairKeyOf(provider, model)
+      if (inherited === on) delete next[scope].pairs[key]
+      else next[scope].pairs[key] = on ? 'on' : 'off'
+      return next
+    }
+
+    /**
+     * What one click on a provider asks for, out of where the group stands.
+     *
+     * A full group clears, a group the reader cleared comes back as its measured
+     * models, and anything else goes to all — the three steps of one cycle, and the
+     * step a partly selected group takes is the first: "all except the ones I
+     * excluded" is not a state a parent checkbox can offer.
+     *
+     * The rule is read as well as the counts, and the reason is the one place the
+     * two statements overlap: a group at "nothing selected" is both "not all
+     * selected" and "cleared", and only the rule says which of the two the reader
+     * last asked for. It is the cleared one that goes to the measured part, so a
+     * group nobody has touched opens on "all" while a group the reader emptied comes
+     * back with the models that have a step behind them.
+     *
+     * `measured` is a rule and not a list of the pairs that have a step, so a model
+     * the provider gains and that is run for the first time joins it — see
+     * `rulesWithProvider`. A group whose every model has been run resolves that rule
+     * to `all`, and there the cycle is honestly two states: there is nothing to tell
+     * "everything" from "everything measured" about.
+     */
+    function nextProviderRule(rule, counts) {
+      if (counts.total > 0 && counts.selected === counts.total) return 'none'
+      return rule === 'none' ? 'measured' : 'all'
+    }
+
+    /**
+     * One provider's checkbox as a rule change.
+     *
+     * It clears the provider's own exceptions, and the reason is what the click
+     * means: "all of this provider" and "none of it" are decisions about the whole
+     * group, and an exception left behind would make the checkbox say one thing
+     * while a model under it said another — the reader would have to click twice to
+     * get what one click asked for. The same goes for "only the measured ones": it
+     * is a statement about the provider, and the pairs it leaves out are the ones it
+     * left out by rule. A rule about the provider is also what makes it stay a
+     * decision: a model it gains later follows it.
+     */
+    function rulesWithProvider(rules, scope, provider, rule) {
+      const next = canonicalSelectionRules(rules)
+      for (const key of Object.keys(next[scope].pairs)) {
+        if (key.slice(0, Math.max(0, key.indexOf('\u0000'))) === provider) delete next[scope].pairs[key]
+      }
+      next[scope].providers[provider] = rule
+      return next
+    }
+
+    /**
+     * The global buttons: every item available under the current archive state.
+     *
+     * The archive being off is not a reason to write marks into a scope nobody can
+     * see — turning the archive on must bring back the reader's own marks and not a
+     * decision this button made on their behalf about models they were never shown.
+     * So the archive scope is rewritten only while the archive is on screen.
+     */
+    function rulesForAll(rules, base, archived) {
+      const next = canonicalSelectionRules(rules)
+      for (const scope of archived === true ? SELECTION_SCOPES : ['live']) {
+        next[scope].base = base
+        next[scope].providers = {}
+        next[scope].pairs = {}
+      }
+      return next
+    }
+
+    /**
+     * The body one panel question is asked with.
+     *
+     * A function of its own because two halves have to agree about it: this panel
+     * builds it and the host validates it (`queryFromBody` in `lib/index.js`), and a
+     * field that drifted — a renamed key, a limit past the host's own ceiling, a
+     * `view` spelling — would come back as a 400 the reader would read as the panel
+     * being broken. `tools/verify-selection.mjs` feeds this function's output to the
+     * host's own validator, so the two are checked against each other rather than
+     * against a hand-written copy of the schema.
+     */
+    function panelQueryBody({ sort, dir, view, archived, selection, wholeSelection }) {
+      return {
+        sort,
+        dir,
+        view,
+        archived: archived === true,
+        limit: wholeSelection === true ? MAX_ROWS : PAGE_ROWS,
+        selection: canonicalSelectionRules(selection),
+      }
+    }
+
     // How the panel is set up is the user's choice, not a cache: it lives in its
     // own key so that dropping the payload cache can never drop the preferences.
-    const PREFS_KEY = 'dsh-model-stats:prefs:v1'
+    //
+    // The key is versioned because the shape changed. v1 kept a flat list of
+    // provider names, which is not a rule and cannot say "everything of this
+    // provider except one model". The version lives in the key rather than in a
+    // field checked at read time, so each half reads exactly the documents it
+    // wrote and never has to guess at an older shape.
+    const PREFS_KEY = 'dsh-model-stats:prefs:v2.selection'
+    const LEGACY_PREFS_KEY = 'dsh-model-stats:prefs:v1'
+
+    /** One JSON document out of the store, or null. Never throws. */
+    function readStoredJson(key) {
+      try {
+        const raw = window.localStorage.getItem(key)
+        if (raw === null) return null
+        const parsed = JSON.parse(raw)
+        return parsed !== null && typeof parsed === 'object' ? parsed : null
+      } catch {
+        return null
+      }
+    }
+
+    // A store the browser refuses is not a reason to lose the panel: this tab keeps
+    // its state in memory and says so, rather than pretending a choice was written
+    // down for the next visit.
+    let memoryPrefs = null
+    let storageProbe = null
+
+    function storageAvailable() {
+      if (storageProbe === null) {
+        try {
+          const probe = 'dsh-model-stats:probe'
+          window.localStorage.setItem(probe, '1')
+          window.localStorage.removeItem(probe)
+          storageProbe = true
+        } catch {
+          storageProbe = false
+        }
+      }
+      return storageProbe
+    }
+
+    /**
+     * The preference document: the display settings and the selection rules.
+     *
+     * A v1 store is migrated once, explicitly, and the old key is left where it is.
+     * The provider filter it holds is a real choice the reader made, and dropping it
+     * would open their panel on a different set of models than the one they left.
+     * Its names become "all of this provider" rules under the default base, which is
+     * the same set of rows that filter showed — and an *empty* list keeps meaning
+     * "no filter", never "nothing selected": reading it as an empty selection is
+     * exactly how a first open would come up blank for everyone who never touched
+     * the control.
+     */
+    function readPrefs() {
+      const stored = readStoredPrefs()
+      if (stored !== null) return stored
+      const legacy = storageAvailable() ? readStoredJson(LEGACY_PREFS_KEY) : null
+      const selection = defaultSelectionRules()
+      for (const name of normalizeProviders(legacy?.providers)) selection.live.providers[name] = 'all'
+      const migrated = {
+        version: 2,
+        sort: Object.prototype.hasOwnProperty.call(SORT_DIRS, legacy?.sort) ? legacy.sort : null,
+        dir: legacy?.dir === 'asc' || legacy?.dir === 'desc' ? legacy.dir : null,
+        view: legacy?.view === 'provider' ? 'provider' : null,
+        archived: legacy?.archived === true,
+        columnsAll: legacy?.columnsAll === true,
+        selection,
+      }
+      // Written down only when there was something to migrate: a default document
+      // on disk would make the next read look like a stored choice. The write is
+      // the raw one, not `writePrefs` — a writer that merged over `readPrefs()`
+      // would re-enter the migration that is still deciding what to write.
+      if (legacy !== null) storePrefs(migrated)
+      return migrated
+    }
+
+    /** A v2 document as this panel reads it, or null when there is not one. */
+    function readStoredPrefs() {
+      const stored = storageAvailable() ? readStoredJson(PREFS_KEY) : memoryPrefs
+      if (stored === null || stored === undefined || stored.version !== 2) return null
+      return {
+        version: 2,
+        sort: Object.prototype.hasOwnProperty.call(SORT_DIRS, stored.sort) ? stored.sort : null,
+        dir: stored.dir === 'asc' || stored.dir === 'desc' ? stored.dir : null,
+        view: stored.view === 'provider' ? 'provider' : null,
+        archived: stored.archived === true,
+        columnsAll: stored.columnsAll === true,
+        selection: normalizeSelectionRules(stored.selection),
+      }
+    }
+
+    /** The document, written where the panel will find it next time. Never reads. */
+    function storePrefs(document) {
+      if (!storageAvailable()) {
+        memoryPrefs = document
+        return
+      }
+      try {
+        window.localStorage.setItem(PREFS_KEY, JSON.stringify(document))
+      } catch {
+        // A full store is not the panel's problem; the choice lives on in this tab.
+        memoryPrefs = document
+      }
+    }
+
+    /**
+     * One change to the preference document.
+     *
+     * The base is what is *stored*, not what a read would produce: merging over a
+     * read is how this function would re-enter the migration above and never
+     * return. A store that has nothing yet is a store whose defaults are the base,
+     * which is the same document the panel opened with.
+     */
+    function writePrefs(patch) {
+      const base = readStoredPrefs() ?? readPrefs()
+      storePrefs({ ...base, ...patch, version: 2 })
+    }
 
     /**
      * The provider selection, as a list of exact names.
      *
-     * Read from three places and normalized once: the host's answer (an array),
-     * the panel's own query string, and whatever the browser kept from a
-     * previous session. Order is not part of the question — `a,b` and `b,a` are
-     * the same filter — so the list is sorted, de-duplicated and bounded before
-     * it becomes a key or a URL. A value that is not a name at all (a number, a
-     * nested array, a 200-entry list from a corrupted store) is dropped rather
-     * than sent: the host answers a filter it cannot match with the whole
-     * table, which is the one result a filter must never produce silently.
+     * Order is not part of the question — `a,b` and `b,a` are the same filter — so
+     * the list is sorted, de-duplicated and bounded. A value that is not a name at
+     * all (a number, a nested array, a 200-entry list from a corrupted store) is
+     * dropped rather than sent: the host answers a filter it cannot match with the
+     * whole table, which is the one result a filter must never produce silently.
+     *
+     * Only the v1 migration reads this now: the panel keeps rules.
      */
     const MAX_PROVIDERS = 24
 
@@ -681,145 +1271,28 @@ window.__ModuleLoader__.load({
       return names.sort().slice(0, MAX_PROVIDERS)
     }
 
-    /** Best-effort read, same contract as the payload cache. */
-    function readPrefs() {
-      try {
-        const raw = window.localStorage.getItem(PREFS_KEY)
-        if (raw === null) return {}
-        const parsed = JSON.parse(raw)
-        return parsed !== null && typeof parsed === 'object' ? parsed : {}
-      } catch {
-        return {}
-      }
-    }
-
-    function writePrefs(patch) {
-      try {
-        window.localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readPrefs(), ...patch }))
-      } catch {
-        // A full or disabled store is not the panel's problem.
-      }
-    }
-
     /**
-     * One raw source of the question — the address, or the settings this browser
-     * kept — read as a query, with `fallback` filling every hole. A stale or
-     * corrupt value must never reach the host as a query.
+     * The question the panel opens with: the last choice this browser kept, and the
+     * defaults for everything it never chose.
      *
-     * The key is checked against every order the table can show, not against the
-     * five preset buttons: a column heading is a sort control too, so a store
-     * that kept `sort: cache` from yesterday is a perfectly good preference. The
-     * direction is checked on its own — it is a direction or it is not, whatever
-     * key it was written under.
-     */
-    function queryFrom(raw, fallback) {
-      const source = raw !== null && typeof raw === 'object' ? raw : {}
-      const known = Object.prototype.hasOwnProperty.call(SORT_DIRS, source.sort)
-      const sort = known ? source.sort : fallback.sort
-      const dir =
-        source.dir === 'asc' || source.dir === 'desc'
-          ? source.dir
-          : (SORT_DIRS[sort] ?? fallback.dir)
-      return {
-        sort,
-        dir,
-        view: source.view === 'provider' ? 'provider' : fallback.view,
-        providers:
-          source.providers === undefined || source.providers === null
-            ? fallback.providers
-            : normalizeProviders(source.providers),
-        // A boolean from the settings and a string from the address are one
-        // value here: the archive is on or it is off, and a corrupt value must
-        // not reach the host as a query — an unreadable preference falls back to
-        // the default rather than turning the filter on.
-        archived:
-          source.archived === undefined || source.archived === null
-            ? fallback.archived === true
-            : flagOf(source.archived),
-      }
-    }
-
-    // --- the question in the address ---------------------------------------------
-    // What the panel shows is worth a link: the same table can be handed to
-    // someone else, kept in a bookmark, or read off the address bar. The five keys
-    // are namespaced because the address belongs to the host's page — the panel
-    // touches only its own, and leaves everything else in the query string
-    // exactly as it found it.
-    const URL_KEYS = {
-      sort: 'msSort',
-      dir: 'msDir',
-      view: 'msView',
-      providers: 'msProvider',
-      archived: 'msArchived',
-    }
-
-    /** What the address asks for, or null when it names no question of ours. */
-    function readUrlQuery() {
-      try {
-        if (typeof window === 'undefined' || typeof window.location?.search !== 'string') return null
-        const params = new URLSearchParams(window.location.search)
-        if (!Object.values(URL_KEYS).some((name) => params.has(name))) return null
-        return {
-          sort: params.get(URL_KEYS.sort) ?? undefined,
-          dir: params.get(URL_KEYS.dir) ?? undefined,
-          view: params.get(URL_KEYS.view) ?? undefined,
-          providers: params.get(URL_KEYS.providers) ?? undefined,
-          archived: params.get(URL_KEYS.archived) ?? undefined,
-        }
-      } catch (error) {
-        // A host that guards its address is not the panel's problem: the question
-        // then simply comes from the settings below.
-        return null
-      }
-    }
-
-    /**
-     * The question the panel opens with: the address first — it is the more
-     * specific statement, and the one a reader typed or followed — then the last
-     * choice this browser kept, then the defaults.
+     * The address used to carry the question too, under `ms*` keys. It no longer
+     * does, and not because a link is worthless: a selection is a rule document,
+     * which cannot be spelled in a query string without either truncating it or
+     * putting a reader's model names somewhere the host's page can read them. The
+     * sort, the view and the archive went with it, so that one surface has one place
+     * to remember what it asked — and the address keeps every key that is not ours,
+     * exactly as it found them.
      */
     function readInitialQuery() {
-      const url = readUrlQuery()
       const prefs = readPrefs()
-      const pick = (key) => (url !== null && url[key] !== undefined ? url[key] : prefs[key])
-      return queryFrom(
-        {
-          sort: pick('sort'),
-          dir: pick('dir'),
-          view: pick('view'),
-          providers: pick('providers'),
-          archived: pick('archived'),
-        },
-        DEFAULT_QUERY,
-      )
-    }
-
-    /**
-     * Write the question into the address, beside whatever the host keeps there.
-     *
-     * Only a choice the reader made reaches this — never an effect keyed on the
-     * value, which would rewrite the address of a panel nobody touched.
-     * `replaceState` rather than a push: the address names what is on screen, it
-     * is not a trail of pages to go Back through.
-     */
-    function writeUrlQuery(sort, dir, view, providers, archived) {
-      try {
-        const href = typeof window === 'undefined' ? undefined : window.location?.href
-        if (typeof href !== 'string' || typeof window.history?.replaceState !== 'function') return
-        const url = new URL(href)
-        url.searchParams.set(URL_KEYS.sort, sort)
-        url.searchParams.set(URL_KEYS.dir, dir)
-        url.searchParams.set(URL_KEYS.view, view)
-        if (providers.length > 0) url.searchParams.set(URL_KEYS.providers, providers.join(','))
-        else url.searchParams.delete(URL_KEYS.providers)
-        // The default has no spelling in the address, for the reason the empty
-        // provider selection has none: a link carries what the reader asked for,
-        // and "the archive is off" is what a link without the key already says.
-        if (archived === true) url.searchParams.set(URL_KEYS.archived, '1')
-        else url.searchParams.delete(URL_KEYS.archived)
-        window.history.replaceState(null, '', url)
-      } catch (error) {
-        // A guarded or unmovable address is not the panel's problem.
+      const sort = prefs.sort ?? DEFAULT_QUERY.sort
+      return {
+        sort,
+        dir: prefs.dir ?? SORT_DIRS[sort] ?? DEFAULT_QUERY.dir,
+        view: prefs.view ?? DEFAULT_QUERY.view,
+        archived: prefs.archived === true,
+        selection: prefs.selection,
+        columnsAll: prefs.columnsAll === true,
       }
     }
 
@@ -930,6 +1403,20 @@ window.__ModuleLoader__.load({
             ctx.view === 'model'
               ? h('span', { className: 'dsh-ms-provider', translate: 'no' }, row.provider)
               : null,
+            // A provider row is a roll-up of the models the reader chose, so it has
+            // to say how much of the provider it stands for: "3 of 4 models" is the
+            // difference between a provider that is slow and one whose slowest model
+            // was left out of the question.
+            ctx.view === 'provider' && ctx.coverage?.has(row.provider)
+              ? h(
+                  'span',
+                  { className: 'dsh-ms-coverage' },
+                  ctx.t('models.providerCount', {
+                    selected: ctx.fmt.count(ctx.coverage.get(row.provider).selected),
+                    total: ctx.fmt.count(ctx.coverage.get(row.provider).total),
+                  }),
+                )
+              : null,
             // The mark is what makes the archive usable: with the filter on, the
             // table holds two kinds of row, and without a word on the retired
             // ones the reader would take them for candidates. It comes last
@@ -959,6 +1446,13 @@ window.__ModuleLoader__.load({
                   ctx.t('noStats.badge'),
                 )
               : null,
+            // The one disclosure in the table: what the row's rating is made of
+            // and what the route declares about itself. Drawn only in the expanded
+            // column set — the compact table is one line per row, and a disclosure
+            // under every name would spend that line on rows the reader has not
+            // asked about. The legend says where it is, and `routeDetails` is the
+            // native `<details>` a keyboard can open without a mouse.
+            ctx.showDetails === true ? routeDetails(row, ctx) : null,
           )
         },
       },
@@ -968,7 +1462,6 @@ window.__ModuleLoader__.load({
       // behind the one part of the table nobody scrolls to.
       {
         key: 'liveness',
-        tier: 'extra',
         align: 'left',
         // Sorting by it is a triage order, not a measurement: what is broken
         // first, and at the bottom the rows nobody has checked — which is the
@@ -987,9 +1480,70 @@ window.__ModuleLoader__.load({
         hintKey: 'hint.liveness',
         cell: (row, ctx) => ctx.renderLiveness(row),
       },
+      // The compact set's one figure that is a verdict rather than a reading, so
+      // it sits next to the status: those two are the whole answer to "which of
+      // these should I use", and everything else in the row is the evidence.
+      {
+        key: 'rating',
+        base: 'num',
+        // The rating is the compact set's only new column and it pays for itself
+        // out of `ош./100`, which moves to the expanded set: the compact table is
+        // six columns wide before and after (see `CORE_COLUMNS`). A rate of errors
+        // per 100 steps is a diagnostic to consult; a score that already folds
+        // throughput and latency together is what a reader picks a route with.
+        sort: 'rating',
+        labelKey: 'column.rating',
+        hintKey: 'hint.rating',
+        // One decimal and no bar. A bar is a share of the largest value in the
+        // column, and the rating is the one figure on this table that is already
+        // 0-100 on its own scale — drawing it against the best row on screen
+        // would say "this is the best of five", which is not what the number says.
+        //
+        // No tone either: green and red in this panel mean "the best and worst
+        // value in the table", and a rating may not be graded by the company it
+        // keeps. The number is read on its own.
+        cell: (row, ctx) => {
+          // Through the shared formatter, never `.toFixed`: a payload from a host
+          // that predates this column has no `rating` at all, and a raw
+          // `undefined.toFixed` takes the whole panel down.
+          const rating = row.rating
+          const score = rating?.score
+          const published = finite(score)
+          const figure = ctx.fmt.num(score, 1)
+          const marks = published ? ratingMarks(rating) : []
+          const note = published
+            ? ctx.t('rating.scoreTitle', {
+                score: figure,
+                qualified: ctx.fmt.count(rating.qualifiedSamples),
+                sessions: ctx.fmt.count(rating.sessions),
+              })
+            : ratingReason(row, ctx)
+          // The tooltip and the hidden text are one sentence on purpose: a `-`
+          // has four different reasons, and a reader who cannot hover is the one
+          // who most needs to be told which of them this is. The marks are part
+          // of it, so the glyphs cannot be read without their sentences.
+          const label = [note, ...marks.map((mark) => ctx.t(mark.text))].join(' · ')
+          return h(
+            'span',
+            { className: 'dsh-ms-val', title: label },
+            figure,
+            // A published score on thin evidence, or one whose evidence has all
+            // aged out, says so in the cell and not only in the tooltip. `~` is
+            // the same mark the agent's text report prints for the same score, so
+            // the two surfaces cannot describe one number two ways.
+            ...marks.map((mark) =>
+              h(
+                'span',
+                { key: mark.key, className: 'dsh-ms-rating-thin', 'aria-hidden': 'true' },
+                mark.glyph,
+              ),
+            ),
+            h('span', { className: 'dsh-ms-sr-only' }, ` — ${label}`),
+          )
+        },
+      },
       {
         key: 'steps',
-        tier: 'core',
         base: 'num',
         sort: 'steps',
         labelKey: 'column.steps',
@@ -998,7 +1552,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'ttft',
-        tier: 'core',
         base: 'num',
         sort: 'ttft',
         labelKey: 'column.ttft',
@@ -1017,7 +1570,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'tps',
-        tier: 'core',
         base: 'num',
         // The column is called tok/s and the host calls the order `speed`; the
         // preset button says "скорость" and the heading says "tok/s med", and
@@ -1036,7 +1588,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'errors',
-        tier: 'core',
         sort: 'errors',
         labelKey: 'column.errors',
         hintKey: 'hint.errors',
@@ -1067,7 +1618,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'errorRate',
-        tier: 'extra',
         base: 'num',
         sort: 'errorRate',
         labelKey: 'column.errorRate',
@@ -1075,11 +1625,23 @@ window.__ModuleLoader__.load({
         // Through the shared formatter rather than `.toFixed` on the raw value:
         // a payload from a host that predates this column has no `errorRate` at
         // all, and `undefined.toFixed` takes the whole panel down.
-        cell: (row, ctx) => ctx.fmt.num(row.errorRate, 1),
+        //
+        // The bar makes the column a scale rather than a rate to divide in one's
+        // head: the same column here reads 0,0 next to 20,1 with nothing between
+        // them, which is two different stories about how often a model fails and
+        // the fastest way to see which is which. It is neutral ink rather than a
+        // verdict — unlike `ош.`, this figure is normalized, so a high bar is not
+        // by itself a fault to point at.
+        cell: (row, ctx) =>
+          h(
+            'span',
+            { className: 'dsh-ms-val' },
+            ctx.fmt.num(row.errorRate, 1),
+            measurementScale(ctx, 'errorRate', row.errorRate),
+          ),
       },
       {
         key: 'modelErrors',
-        tier: 'extra',
         base: 'num',
         sort: 'modelErrors',
         labelKey: 'column.modelErrors',
@@ -1089,7 +1651,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'interrupted',
-        tier: 'extra',
         base: 'num',
         sort: 'interrupted',
         labelKey: 'column.interrupted',
@@ -1099,7 +1660,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'ttftP90',
-        tier: 'extra',
         sort: 'ttftP90',
         labelKey: 'column.ttftP90',
         hintKey: 'hint.ttftP90',
@@ -1107,7 +1667,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'tpsMax',
-        tier: 'extra',
         sort: 'tpsMax',
         labelKey: 'column.tpsMax',
         hintKey: 'hint.tpsMax',
@@ -1115,7 +1674,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'confidence',
-        tier: 'extra',
         sort: 'confidence',
         labelKey: 'column.confidence',
         hintKey: 'hint.confidence',
@@ -1127,7 +1685,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'llm',
-        tier: 'extra',
         sort: 'llm',
         labelKey: 'column.llm',
         hintKey: 'hint.llm',
@@ -1135,7 +1692,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'cache',
-        tier: 'extra',
         sort: 'cache',
         labelKey: 'column.cache',
         hintKey: 'hint.cache',
@@ -1147,7 +1703,6 @@ window.__ModuleLoader__.load({
       // slow one. The rate alone cannot tell them apart.
       {
         key: 'retry',
-        tier: 'extra',
         base: 'num',
         sort: 'retry',
         labelKey: 'column.retry',
@@ -1175,7 +1730,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'ttftClean',
-        tier: 'extra',
         base: 'num',
         sort: 'ttftClean',
         labelKey: 'column.ttftClean',
@@ -1187,7 +1741,6 @@ window.__ModuleLoader__.load({
       // is in the denominator, and that difference is the ranking.
       {
         key: 'e2e',
-        tier: 'extra',
         base: 'num',
         sort: 'e2e',
         labelKey: 'column.e2e',
@@ -1205,7 +1758,6 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'prefill',
-        tier: 'extra',
         base: 'num',
         sort: 'prefill',
         labelKey: 'column.prefill',
@@ -1224,7 +1776,6 @@ window.__ModuleLoader__.load({
       // harness spent between the last delta and the closing message.
       {
         key: 'overhead',
-        tier: 'extra',
         base: 'num',
         sort: 'overhead',
         labelKey: 'column.overhead',
@@ -1236,7 +1787,6 @@ window.__ModuleLoader__.load({
       // of its own instead of an invisible key.
       {
         key: 'lastSeen',
-        tier: 'extra',
         sort: 'lastSeen',
         labelKey: 'column.lastSeen',
         hintKey: 'hint.lastSeen',
@@ -1248,14 +1798,29 @@ window.__ModuleLoader__.load({
     // preserves the sticky corner and keyboard scroll clearance; subtle dividers
     // mark group boundaries without adding another sticky header to negotiate.
     const COLUMN_GROUPS = [
-      ['name', 'liveness'],
+      ['name', 'liveness', 'rating'],
       ['steps', 'lastSeen'],
       ['ttft', 'ttftP90', 'ttftClean', 'retry'],
       ['e2e', 'tps', 'tpsMax', 'confidence'],
       ['errorRate', 'modelErrors', 'errors', 'interrupted'],
       ['llm', 'prefill', 'overhead', 'cache'],
     ]
-    const CORE_COLUMNS = new Set(['name', 'liveness', 'steps', 'ttft', 'e2e', 'errorRate'])
+    // The compact set: identity, the two columns a reader acts on, and the three
+    // figures a decision is made from. It is six columns wide, the same as it was
+    // before the rating existed — `ош./100` paid for the rating rather than the
+    // table growing a seventh. Every other column is one click away behind
+    // "all metrics", including a rate a reader consults rather than picks by.
+    //
+    // This set is the *only* declaration of what is compact. The definitions above
+    // carry no `tier` of their own, and the table's `tier` is derived from here in
+    // the one place below, because the alternative was tried and read wrong: 19
+    // per-column `tier` values used to sit in those definitions, nothing read them
+    // (the render filter reads the derived copy), and four of them contradicted
+    // this set — `liveness` and `e2e` said `extra` while they are compact, `tps`
+    // and `errors` said `core` while they are not. The rendered table was right and
+    // the list was wrong, which is the worst shape for a list a reader treats as
+    // the specification.
+    const CORE_COLUMNS = new Set(['name', 'liveness', 'rating', 'steps', 'ttft', 'e2e'])
     const COLUMNS = COLUMN_GROUPS.flatMap((keys, group) => keys.map((key, index) => ({
       ...COLUMN_DEFINITIONS.find((column) => column.key === key),
       tier: CORE_COLUMNS.has(key) ? 'core' : 'extra',
@@ -1296,6 +1861,25 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The metrics a cell can ask to have scaled, and the row field each one reads.
+     *
+     * Declared here, beside the bar that draws them, because the bar can only be a
+     * share of something the pass measured: a metric missing from this table has no
+     * maximum, and `measurementScale` draws nothing for it. A column that wants one
+     * added says so by naming a field the host really sends.
+     *
+     * The list is the metrics, not the columns: a count (`шагов`) is the size of the
+     * sample rather than a figure about the model, and a bar under it would be read
+     * as "the busiest model" next to a column of latencies.
+     */
+    const SCALED = {
+      ttft: 'ttftMedian',
+      tps: 'tpsMedian',
+      e2e: 'e2eTpsMedian',
+      errorRate: 'errorRate',
+    }
+
+    /**
      * The bar under one measurement: that value's share of the largest value of
      * its column among the rows on screen.
      *
@@ -1319,6 +1903,228 @@ window.__ModuleLoader__.load({
         'span',
         { className: 'dsh-ms-scale', 'aria-hidden': 'true' },
         h('span', { className: 'dsh-ms-scale-fill', style: { width: `${share}%` } }),
+      )
+    }
+
+    /**
+     * The age past which a published score stops describing the route as it is and
+     * becomes a historical note: 30 days.
+     *
+     * The host's own `RATING_POLICY.halfLifeDays` is 30, and the rating's own rule
+     * is that a measurement 30 days older than the pair's newest usable one counts
+     * half — so an anchor further back than that is a score whose evidence has all
+     * decayed at least once. The panel cannot import the policy (it has no build
+     * step and no importer) any more than it can import the host's constant for
+     * anything else, so the number is restated here; the comment is what makes the
+     * duplication checkable. It decides a mark, never the score: freshness is
+     * descriptive, and a dormant route keeps exactly the rating its history earned.
+     *
+     * The host marks the same row with the same comparison (`anchorIsStale` in
+     * `collect.js`, read off `RATING_POLICY`) and now prints the same `*` in the
+     * text report, so the two surfaces cannot describe one score two ways — which
+     * was the defect until the report caught up. `tools/verify-rating-paths.mjs`
+     * pins the report's half on a frozen clock and the boundary (strict `>`, 30 days
+     * exactly is not yet stale) is asserted on both sides.
+     */
+    const RATING_STALE_MS = 30 * 24 * 60 * 60 * 1000
+
+    /** Whether one row's rating stands on evidence older than {@link RATING_STALE_MS}. */
+    function ratingIsStale(rating, now = Date.now()) {
+      return finite(rating?.anchor) && now - rating.anchor > RATING_STALE_MS
+    }
+
+    /**
+     * The marks a published rating can wear beside its number, in the order they
+     * are read: thin evidence first, then age.
+     *
+     * Each one is a glyph with a sentence behind it — in the cell's tooltip for a
+     * mouse, in the hidden text for a screen reader, and as a line of its own in
+     * the detail block. Two marks rather than one word because they are two
+     * different caveats that can hold at once: a route measured well and long ago
+     * is not the same row as one measured twice yesterday.
+     */
+    function ratingMarks(rating) {
+      const marks = []
+      if (rating?.provisional === true) {
+        marks.push({ key: 'provisional', glyph: '~', text: 'rating.provisional' })
+      }
+      if (ratingIsStale(rating)) {
+        marks.push({ key: 'stale', glyph: '*', text: 'rating.stale' })
+      }
+      return marks
+    }
+
+    /**
+     * Why one row has no rating: a sentence built from the code the host sent.
+     *
+     * Four codes, four different facts, and the cell shows the same `-` for all of
+     * them — which is why the sentence exists at all. `no_samples` is also the
+     * fallback for a row that arrived with no rating at all: a host that predates
+     * the column, or a payload that lost the field. An unknown code must not
+     * travel as an id no dictionary can explain.
+     */
+    function ratingReason(row, ctx) {
+      const rating = row.rating
+      const reason = rating?.reason
+      if (reason === 'pair_only') return ctx.t('rating.pairOnly')
+      if (reason === 'no_qualified_samples') return ctx.t('rating.noQualified')
+      if (reason === 'insufficient_samples') {
+        return ctx.t('rating.insufficient', {
+          qualified: ctx.fmt.count(rating?.qualifiedSamples),
+          effective: ctx.fmt.num(rating?.effectiveSamples, 1),
+        })
+      }
+      return ctx.t('rating.noSamples')
+    }
+
+    /**
+     * The expanded table's one disclosure: where a row's rating came from.
+     *
+     * A native `<details>` rather than a tooltip or a popover, because this is the
+     * explanation of the one figure in the row that is a verdict: a reader must be
+     * able to reach it with a keyboard, and the browser already gives that to a
+     * `<summary>` for free. It is rendered only in the expanded column set (see
+     * `ctx.showDetails`), and only in the model view: the compact table is one
+     * line per row, and a disclosure under every name would spend that line on
+     * rows nobody has asked about. The legend's own sentence is what tells a
+     * reader it is there.
+     *
+     * The block carries three kinds of thing, in the order the question arrives:
+     * the score and the counts behind it, the measurements and multipliers that
+     * produced it, and the route's declared reference data. Price and quotas have
+     * no source in this release and say so rather than being left out — an absent
+     * line reads as "free" and "unlimited", the one reading that is wrong. A
+     * provider row has no single pair to explain, so it gets the pair-only
+     * sentence and nothing else.
+     */
+    function routeDetails(row, ctx) {
+      const t = ctx.t
+      const fmt = ctx.fmt
+      const unknown = t('details.unknown')
+      const lines = []
+
+      if (ctx.view === 'provider') {
+        lines.push(t('rating.pairOnly'))
+      } else {
+        const rating = row.rating
+        const score = rating?.score
+        if (finite(score)) {
+          lines.push(
+            t('details.rating', {
+              version: typeof rating?.version === 'string' ? rating.version : unknown,
+              score: fmt.num(score, 1),
+            }),
+          )
+          for (const mark of ratingMarks(rating)) lines.push(t(mark.text))
+        } else {
+          lines.push(ratingReason(row, ctx))
+        }
+        // Counts first and the anchor after them: "how much evidence" is the
+        // question and "how old" is the caveat on the answer. The two exclusions
+        // are counts and not a partition — a step can be both retried and
+        // interrupted — and the sentence says so rather than implying a sum.
+        lines.push(
+          t('details.evidence', {
+            qualified: fmt.count(rating?.qualifiedSamples),
+            answered: fmt.count(rating?.answeredSamples),
+            retried: fmt.count(rating?.excludedRetried),
+            interrupted: fmt.count(rating?.excludedInterrupted),
+            effective: fmt.num(rating?.effectiveSamples, 1),
+            sessions: fmt.count(rating?.sessions),
+          }),
+        )
+        if (finite(rating?.anchor)) {
+          lines.push(t('details.anchor', { ago: fmt.ago(rating.anchor) }))
+        }
+        const inputs = rating?.inputs
+        if (finite(inputs?.tpsMedian) || finite(inputs?.ttftMedianMs)) {
+          lines.push(
+            t('details.measurements', {
+              tps: fmt.num(inputs?.tpsMedian, 1),
+              ttft: fmt.ms(inputs?.ttftMedianMs),
+              ttftP90: fmt.ms(inputs?.ttftP90Ms),
+            }),
+          )
+        }
+        const factors = rating?.components
+        if (finite(factors?.throughput) || finite(factors?.latency)) {
+          lines.push(
+            t('details.factors', {
+              throughput: fmt.num(factors?.throughput, 2),
+              latency: fmt.num(factors?.latency, 2),
+              tail: fmt.num(factors?.tailLatency, 2),
+            }),
+          )
+        }
+        // The route's own declaration. `routeMetadata: null` is "the adapter was
+        // not asked or did not answer" and an object of nulls is "the adapter
+        // answered and declares nothing" — two different facts, kept apart here
+        // the way the host keeps them apart.
+        const route = row.routeMetadata
+        if (route === null || route === undefined) {
+          lines.push(t('details.referenceNone'))
+        } else {
+          const modalities = Array.isArray(route.inputModalities)
+            ? route.inputModalities.join(', ')
+            : unknown
+          const efforts = Array.isArray(route.reasoningEfforts) ? route.reasoningEfforts : []
+          const names = efforts.map((effort) => effort?.name ?? effort?.id).filter(Boolean)
+          // The default is named beside the choices rather than instead of them,
+          // and by its display name: it is the mode a request that names none gets,
+          // so it is the one a reader comparing two runs of the same model has to
+          // know. `defaultReasoningEffort` arrives as an id, and an id whose name
+          // the adapter did not send stays an id rather than becoming a dash.
+          const fallback =
+            typeof route.defaultReasoningEffort === 'string' ? route.defaultReasoningEffort : null
+          const chosen =
+            fallback === null
+              ? null
+              : (efforts.find((effort) => effort?.id === fallback)?.name ?? fallback)
+          lines.push(
+            t('details.reference', {
+              // A field the adapter did not declare is named as such rather than
+              // shown as the panel's `-`: this line makes a claim about the route
+              // ("it declares"), and a dash inside it reads as "we did not look",
+              // which is the other of the two facts `routeMetadata` can carry.
+              context: finite(route.contextWindow) ? fmt.count(route.contextWindow) : unknown,
+              outputCap: finite(route.defaultMaxTokens) ? fmt.count(route.defaultMaxTokens) : unknown,
+              modalities,
+              reasoning:
+                names.length === 0
+                  ? unknown
+                  : chosen === null
+                    ? names.join(', ')
+                    : t('details.reasoningDefault', {
+                        efforts: names.join(', '),
+                        defaultEffort: chosen,
+                      }),
+            }),
+          )
+          lines.push(
+            t('details.referenceSource', {
+              ago: finite(route.checkedAt) ? fmt.ago(route.checkedAt) : unknown,
+            }),
+          )
+        }
+        // No source exists for a tariff or a quota in this release, so this line
+        // is here to say that rather than to hold a value. A column of dashes
+        // would have been the alternative, and a permanent column is worse than
+        // one sentence in a block the reader opened on purpose.
+        lines.push(t('details.price', { value: t('details.priceUnknown') }))
+        lines.push(t('details.caution'))
+      }
+
+      return h(
+        'details',
+        { className: 'dsh-ms-details' },
+        h('summary', { className: 'dsh-ms-details-open' }, t('details.summary')),
+        h(
+          'div',
+          { className: 'dsh-ms-details-body' },
+          ...lines.map((line, index) =>
+            h('p', { key: `${index}`, className: 'dsh-ms-details-line' }, line),
+          ),
+        ),
       )
     }
 
@@ -1741,20 +2547,48 @@ window.__ModuleLoader__.load({
 .dsh-ms-filter-panel { display:flex; flex-direction:column; gap:6px; margin:8px 0 2px; padding:8px;
   border:1px solid var(--ms-line); border-radius:var(--dsw-radius-md, 8px);
   background:var(--ms-fill); max-width:420px; }
-.dsh-ms-filter-list { display:flex; flex-direction:column; gap:2px; max-height:220px; overflow:auto;
-  overscroll-behavior:contain; }
 .dsh-ms-filter-row { display:flex; align-items:center; gap:8px; padding:4px 6px;
   border-radius:var(--dsw-radius-xs, 4px); font-size:12px; color:var(--ms-ink); cursor:pointer;
   touch-action:manipulation; }
-.dsh-ms-filter-row:hover { background:var(--ms-hover); }
-.dsh-ms-filter-row:focus-within { outline:var(--ms-ring-w) solid var(--ms-ring); outline-offset:-2px; }
-.dsh-ms-filter-row input { margin:0; flex:none; accent-color:var(--ms-accent); }
-/* A provider the cap keeps out of the selection says so by looking out of it. */
-.dsh-ms-filter-row input:disabled + .dsh-ms-filter-name { color:var(--ms-ink-3); }
+.dsh-ms-filter-row:hover, .dsh-ms-tree-row:hover, .dsh-ms-tree-parent:hover { background:var(--ms-hover); }
+.dsh-ms-filter-row:focus-within, .dsh-ms-tree-row:focus-within, .dsh-ms-tree-parent:focus-within {
+  outline:var(--ms-ring-w) solid var(--ms-ring); outline-offset:-2px; }
+.dsh-ms-filter-row input, .dsh-ms-tree-row input, .dsh-ms-tree-parent input {
+  margin:0; flex:none; accent-color:var(--ms-accent); }
 .dsh-ms-filter-name { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
 .dsh-ms-filter-count { flex:none; font-size:11px; color:var(--ms-ink-3);
   font-variant-numeric:tabular-nums; }
 .dsh-ms-filter-note { font-size:11.5px; line-height:1.45; color:var(--ms-ink-3); text-wrap:pretty; }
+/* The models row: the count, the tree behind a disclosure, and the way back. */
+.dsh-ms-models { display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap; }
+.dsh-ms-models-count { font-variant-numeric:tabular-nums; color:var(--ms-ink-3); font-weight:400; }
+/* The tree: a provider, then its models indented under it. The scroll is on the
+   list and not on the panel, so the search and the two group buttons stay put
+   while a long catalog moves under them — and the panel itself is bounded by the
+   viewport, because a reader on a narrow screen must be able to reach the table
+   below without hunting for the end of a list. */
+.dsh-ms-tree { display:flex; flex-direction:column; gap:2px; max-height:min(52vh, 420px);
+  overflow:auto; overscroll-behavior:contain; }
+.dsh-ms-tree-group { display:flex; flex-direction:column; gap:1px; }
+.dsh-ms-tree-parent { display:flex; align-items:center; gap:8px; padding:5px 6px; margin-top:4px;
+  border-radius:var(--dsw-radius-xs, 4px); font-size:12px; font-weight:600; color:var(--ms-ink);
+  cursor:pointer; touch-action:manipulation; }
+.dsh-ms-tree-group:first-child > .dsh-ms-tree-parent { margin-top:0; }
+.dsh-ms-tree-row { display:flex; align-items:center; gap:8px; padding:3px 6px 3px 22px;
+  border-radius:var(--dsw-radius-xs, 4px); font-size:12px; color:var(--ms-ink); cursor:pointer;
+  touch-action:manipulation; }
+/* The full pair is what a checkbox is about, so a long id wraps rather than
+   pushing the count out of the panel. */
+.dsh-ms-tree-name, .dsh-ms-tree-model { flex:1 1 auto; min-width:0; overflow-wrap:anywhere;
+  font-family:var(--ms-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size:11.5px; }
+.dsh-ms-tree-count, .dsh-ms-coverage { flex:none; font-size:11px; color:var(--ms-ink-3);
+  font-variant-numeric:tabular-nums; }
+.dsh-ms-coverage { display:block; }
+.dsh-ms-tree-search { width:100%; box-sizing:border-box; padding:5px 8px; font:inherit; font-size:12px;
+  color:var(--ms-ink); background:var(--ms-sunken); border:1px solid var(--ms-line);
+  border-radius:var(--dsw-radius-xs, 4px); }
+.dsh-ms-tree-search:focus-visible { outline:var(--ms-ring-w) solid var(--ms-ring); outline-offset:1px; }
+.dsh-ms-tree-actions { display:flex; gap:6px; flex-wrap:wrap; }
 /* The archive is not one of the providers and does not sit in their list: a rule
    and a wider gap keep it above them as the second dimension it is. */
 .dsh-ms-filter-archive { border-bottom:.5px solid var(--ms-line); border-radius:0;
@@ -1878,6 +2712,29 @@ window.__ModuleLoader__.load({
 .dsh-ms-nostats { display:inline-block; margin-top:2px; margin-right:4px; padding:0 5px;
   border:1px solid var(--ms-line); border-radius:var(--dsw-radius-xs, 4px);
   font-size:10px; line-height:1.5; letter-spacing:.02em; color:var(--ms-ink-3); }
+/* The one mark next to a figure in the table: a rating stands on fewer
+   measurements than the panel would like to publish from, and the number is
+   printed anyway rather than withheld. It is tertiary ink, not a state colour —
+   thin evidence is a caveat on a reading, not a fault, and green or red beside a
+   score would be the intelligence grading this column must not do. */
+.dsh-ms-rating-thin { margin-left:2px; color:var(--ms-ink-3); }
+/* The route's own detail, folded under the name it belongs to. A native details
+   element, so Enter and Space open it and no handler here has to; the summary
+   keeps the panel's own ink because it is a control, and the body is the sunken
+   well the rest of the panel uses for a block that is a note rather than a
+   line. */
+.dsh-ms-details { margin-top:3px; font-size:10.5px; color:var(--ms-ink-3); }
+.dsh-ms-details-open { cursor:pointer; touch-action:manipulation;
+  border-radius:var(--dsw-radius-xs, 4px); }
+.dsh-ms-details-open:hover { color:var(--ms-ink-2); text-decoration:underline;
+  text-underline-offset:2px; }
+.dsh-ms-details-open:focus-visible { outline:var(--ms-ring-w) solid var(--ms-ring);
+  outline-offset:-1px; }
+.dsh-ms-details-body { margin-top:4px; padding:6px 8px; border:1px solid var(--ms-line);
+  border-radius:var(--dsw-radius-sm, 6px); background:var(--ms-sunken);
+  color:var(--ms-ink-2); }
+.dsh-ms-details-line { margin:0 0 3px; line-height:1.45; overflow-wrap:anywhere; }
+.dsh-ms-details-line:last-child { margin-bottom:0; }
 .dsh-ms-num { color:var(--ms-ink); }
 .dsh-ms-dim { color:var(--ms-ink-2); }
 .dsh-ms-warn { color:var(--dsw-alias-state-warn-primary); }
@@ -2032,58 +2889,54 @@ window.__ModuleLoader__.load({
       const t = i18n?.t ?? fallbackTranslate
       const locale = useActiveLocale(i18n?.locale)
       const fmt = React.useMemo(() => formattersFor(locale), [locale])
-      // Sort, view and the provider filter are the user's settings, not view
-      // state: reopening the panel reopens the same question. The payload cache
-      // is keyed by the exact query, so restoring the query also restores an
-      // instant first paint instead of a spinner.
-      // The question the panel opens with: the address first — the more specific
-      // statement, and the one a reader typed or followed — then the last choice
-      // this browser kept (see `readInitialQuery`).
+      // Sort, the view, the archive and the selection are the user's settings, not
+      // view state: reopening the panel reopens the same question. The payload
+      // cache is keyed by the exact query, so restoring the question also restores
+      // an instant first paint instead of a spinner (see `readInitialQuery`).
       const [initialQuery] = React.useState(readInitialQuery)
       const [sort, setSort] = React.useState(initialQuery.sort)
-      // The direction is part of the question, not part of the view: it travels
-      // in the query string, in the cache key and in the stored preference, so
-      // reopening the panel reopens the same order rather than a table that
-      // looks reversed next to the arrow it remembers drawing.
+      // The direction is part of the question, not part of the view: it is stored
+      // with the rest and sent with every request, so reopening the panel reopens
+      // the same order rather than a table that looks reversed next to the arrow it
+      // remembers drawing.
       const [dir, setDir] = React.useState(initialQuery.dir)
       const [view, setView] = React.useState(initialQuery.view)
-      const [providers, setProviders] = React.useState(initialQuery.providers)
-      // The archive is a filter like the provider selection and travels with it
-      // — same query string, same store, same cache key — but it is off until it
-      // is asked for: a model the harness no longer serves is not a model to
-      // pick, and a table that listed one by default would be recommending it.
+      // Which models the table is about, as rules rather than as a list of pairs —
+      // see the selection block near the top of this factory for why the two are
+      // not the same thing, and why the rules are what travels to the host.
+      const [selection, setSelection] = React.useState(initialQuery.selection)
+      // The archive is a scope of the selection and travels with it — same store,
+      // same cache key — but it is off until it is asked for: a model the harness
+      // no longer serves is not a model to pick, and a table that listed one by
+      // default would be recommending it.
       const [archived, setArchived] = React.useState(initialQuery.archived)
-      // The provider view already has one row per provider, so a filter there
-      // could only ever leave a single row. The selection is kept rather than
-      // thrown away — it is the answer to a question the user asked in the other
-      // view — but it is not sent, and it comes back on the way back.
-      const applied = React.useMemo(
-        () => (view === 'provider' ? [] : providers),
-        [view, providers],
-      )
+      // The tree is opened by the reader and starts closed: a panel that reopened
+      // with a hundred checkboxes unfolded would bury the table it is there to
+      // filter. The search is navigation only — it hides rows, never changes what a
+      // group action means (see `rulesWithProvider`).
+      const [treeOpen, setTreeOpen] = React.useState(false)
+      const [treeQuery, setTreeQuery] = React.useState('')
+      // A selection larger than the page the panel asks for is a fact the panel
+      // reports and lets the reader answer, rather than one it hides by asking for
+      // more rows than any request should carry (see `MAX_ROWS`).
+      const [wholeSelection, setWholeSelection] = React.useState(false)
       // The deep metrics start collapsed and the choice sticks to the browser
       // across reopenings: the table answers the question first and keeps the
       // deeper figures one click away.
-      const [showAllColumns, setShowAllColumns] = React.useState(() => readPrefs().columnsAll === true)
+      const [showAllColumns, setShowAllColumns] = React.useState(initialQuery.columnsAll === true)
       // The legend is a footnote, and it starts folded: the table answers its
       // question first.
       const [showLegend, setShowLegend] = React.useState(false)
       // The last answer, whatever query it answered. It is shown immediately
       // when the browser still has it and replaced the moment the host answers;
       // when it is older than the current query it stays on screen and says so.
-      const [state, setState] = React.useState(() => {
-        // The cache is written under the query that was actually sent, and the
-        // provider view sends no filter — so the first lookup has to drop the
-        // remembered selection the same way. Looking it up with the selection
-        // still on would miss the panel's own entry and paint a spinner over a
-        // table this browser already has.
-        const asked = initialQuery.view === 'provider' ? [] : initialQuery.providers
-        return querySwitched(
+      const [state, setState] = React.useState(() =>
+        querySwitched(
           EMPTY_STATE,
-          readCachedPayload(initialQuery.sort, initialQuery.dir, initialQuery.view, asked, initialQuery.archived),
-          queryKey(initialQuery.sort, initialQuery.dir, initialQuery.view, asked, initialQuery.archived),
-        )
-      })
+          readCachedPayload(initialQuery.sort, initialQuery.dir, initialQuery.view, initialQuery.selection, initialQuery.archived),
+          queryKey(initialQuery.sort, initialQuery.dir, initialQuery.view, initialQuery.selection, initialQuery.archived),
+        ),
+      )
       const timedOutRef = React.useRef(false)
       const retriesRef = React.useRef(0)
       const lastPendingRef = React.useRef(0)
@@ -2230,25 +3083,30 @@ window.__ModuleLoader__.load({
             error: null,
           }))
           try {
-            // The filter rides in the same query as the sort: one question, one
-            // request, and one cache key. It is omitted entirely when nothing is
-            // selected, so the unfiltered panel keeps asking exactly what it
-            // asked before the filter existed. The direction is always named,
-            // even in the key's own — the host is asked for an order, not for
-            // whatever it would have done on its own. The archive is named only
-            // when it is on, for the same reason: `archived=1` is the filter,
-            // and its absence is the default. The page size is named for that
-            // reason too (see `PAGE_ROWS`): a table that lists the configuration
-            // cannot be drawn on a host's own idea of a page.
-            const names = applied.length > 0 ? `&provider=${encodeURIComponent(applied.join(','))}` : ''
-            const archiveParam = archived ? '&archived=1' : ''
-            const query = `?sort=${encodeURIComponent(sort)}&dir=${encodeURIComponent(dir)}&view=${encodeURIComponent(view)}${names}${archiveParam}&limit=${PAGE_ROWS}`
-            const response = await fetch(`/api/model-stats${query}`, { signal })
+            // One question, one request, one cache key. The selection goes as rules
+            // and not as a resolved list of pairs, because only the host holds the
+            // catalog the rules are about: a list the panel resolved from its last
+            // answer would miss a model the configuration gained since, and it would
+            // miss it exactly where the reader asked for completeness ("all of this
+            // provider"). The host resolves, and echoes what it applied.
+            //
+            // The direction is always named, even in the key's own — the host is
+            // asked for an order, not for whatever it would have done on its own.
+            // The page size is named for the reason `PAGE_ROWS` gives: a table that
+            // lists the configuration cannot be drawn on a host's own idea of a page.
+            const response = await fetch('/api/model-stats/query', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(
+                panelQueryBody({ sort, dir, view, archived, selection, wholeSelection }),
+              ),
+              signal,
+            })
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             const data = await response.json()
             if (data.ok === false) throw new Error(data.error ?? 'unknown error')
-            writeCachedPayload(sort, dir, view, applied, archived, data)
-            setState(queryAnswered(data, queryKey(sort, dir, view, applied, archived)))
+            writeCachedPayload(sort, dir, view, selection, archived, data)
+            setState(queryAnswered(data, queryKey(sort, dir, view, selection, archived)))
             if (manual) say(t('announce.updated'))
           } catch (error) {
             if (error && error.name === 'AbortError') {
@@ -2264,7 +3122,7 @@ window.__ModuleLoader__.load({
             fail(failureReason(error, t))
           }
         },
-        [sort, dir, view, applied, archived, fail, say, t],
+        [sort, dir, view, selection, archived, wholeSelection, fail, say, t],
       )
 
       // Announce the end of a sweep once, from the transition rather than from
@@ -2289,15 +3147,15 @@ window.__ModuleLoader__.load({
       }, [liveJob, liveOverrides, say, t, fmt, load])
 
       React.useEffect(() => {
-        // Switching the sort, the direction, the view, the provider filter or
-        // the archive switches the query: show what the browser already has for
-        // the new one, and when it has nothing, keep the rows that are already on
-        // screen rather than blanking the panel while the host is asked.
+        // Switching the sort, the direction, the view, the selection or the archive
+        // switches the query: show what the browser already has for the new one, and
+        // when it has nothing, keep the rows that are already on screen rather than
+        // blanking the panel while the host is asked.
         setState((prev) =>
           querySwitched(
             prev,
-            readCachedPayload(sort, dir, view, applied, archived),
-            queryKey(sort, dir, view, applied, archived),
+            readCachedPayload(sort, dir, view, selection, archived),
+            queryKey(sort, dir, view, selection, archived),
           ),
         )
 
@@ -2314,7 +3172,7 @@ window.__ModuleLoader__.load({
           clearTimeout(timer)
           controller.abort()
         }
-      }, [load, sort, dir, view])
+      }, [load, sort, dir, view, selection, archived, wholeSelection])
 
       // The host answers from its cache first and refreshes behind it, so an
       // early answer can still be catching up. Keep asking — quietly, and only
@@ -2370,51 +3228,30 @@ window.__ModuleLoader__.load({
         }
       }, [rows])
 
-      // The two headline columns carry their own scale (see `measurementScale`):
-      // the largest value in a column is the full width of its bar, and every
-      // other row is that value's share of it. One row alone has nothing to be
-      // compared with and is left without one.
+      // The scaled columns carry their own scale (see `measurementScale`): the
+      // largest value in a column is the full width of its bar, and every other row
+      // is that value's share of it. One row alone has nothing to be compared with
+      // and is left without one.
+      //
+      // One table of maxima for every metric a cell asks to be scaled by, and the
+      // ask is what puts a metric in it — the bar is drawn from a lookup rather
+      // than from a name the column spells out, so a column that asked for a metric
+      // this pass did not measure drew nothing and looked like a column the panel
+      // had no opinion about. `SCALED` is the list of what a scaled cell can name;
+      // a metric outside it draws no bar, which is the honest answer for a figure
+      // with no scale to be a share of.
       const scale = React.useMemo(() => {
-        const widest = { rows: rows.length, ttft: 0, tps: 0 }
+        const widest = { rows: rows.length }
+        const metrics = Object.keys(SCALED)
+        for (const metric of metrics) widest[metric] = 0
         for (const row of rows) {
-          if (finite(row.ttftMedian) && row.ttftMedian > widest.ttft) widest.ttft = row.ttftMedian
-          if (finite(row.tpsMedian) && row.tpsMedian > widest.tps) widest.tps = row.tpsMedian
+          for (const metric of metrics) {
+            const value = row[SCALED[metric]]
+            if (finite(value) && value > widest[metric]) widest[metric] = value
+          }
         }
         return widest
       }, [rows])
-
-      // The providers the filter can offer, taken from the answer rather than
-      // from the rows on screen: the rows are sorted, cut to the limit and
-      // already filtered, so they name a handful of the providers in the history
-      // — and the ones a filter exists to compare are exactly the ones missing.
-      // A selection the current answer does not know stays in the list, or the
-      // control would show a filter it cannot offer to lift.
-      const knownProviders = React.useMemo(() => {
-        const list = Array.isArray(state.data?.providerList) ? state.data.providerList : []
-        const entries = []
-        const seen = new Set()
-        const add = (entry) => {
-          if (typeof entry?.provider !== 'string' || entry.provider === '') return
-          if (seen.has(entry.provider)) return
-          seen.add(entry.provider)
-          entries.push(entry)
-        }
-        for (const entry of list) add(entry)
-        // An answer from a host that predates the filter — a cached payload
-        // written before it existed — carries no list; the rows still name the
-        // providers that are in it.
-        for (const row of rows) add({ provider: row.provider, models: null, steps: row.steps })
-        for (const name of providers) add({ provider: name, models: null, steps: null })
-        // Alphabetical, so a provider is found where its name says it is. The
-        // host sends its list busiest first, and that is the right order for
-        // reading a ranking and the wrong one for finding a checkbox: the list
-        // mixes providers of very different traffic, so a name moves between
-        // two answers and has to be hunted for again. The name is the only key
-        // a row here has that does not change under the reader, so it is the
-        // one the order is built on. `steps` stays on the row itself, beside
-        // the name, where it explains the table without ordering it.
-        return entries.sort((a, b) => a.provider.localeCompare(b.provider))
-      }, [state.data, rows, providers])
 
       // The name of an order in a sentence: the heading of the column that sorts
       // by it — «отклик med» says which figure the rows are in, not just which
@@ -2428,14 +3265,13 @@ window.__ModuleLoader__.load({
         return t(typeof column.labelKey === 'function' ? column.labelKey(view) : column.labelKey)
       }
 
-      // Choosing a sort, a view or a provider is a lasting decision, so it is
-      // written down as it is made — never in an effect keyed on the value,
-      // which would also rewrite the default on a panel the user only glanced at.
+      // Every choice below is a lasting decision, so it is written down as it is
+      // made — never in an effect keyed on the value, which would also rewrite the
+      // default on a panel the user only glanced at.
       const applyOrder = (nextSort, nextDir) => {
         setSort(nextSort)
         setDir(nextDir)
         writePrefs({ sort: nextSort, dir: nextDir })
-        writeUrlQuery(nextSort, nextDir, view, applied, archived)
         // A new order moves every row in the table and the arrow is the only part
         // of that a screen reader would otherwise have to go looking for, so the
         // order is named out loud on the same channel the refresh uses.
@@ -2451,45 +3287,81 @@ window.__ModuleLoader__.load({
       const chooseView = (next) => {
         setView(next)
         writePrefs({ view: next })
-        // The provider view sends no filter, so the address has to name what is
-        // sent rather than what is remembered. The archive is not a provider
-        // selection and is sent in both views, so it stays named either way.
-        writeUrlQuery(sort, dir, next, next === 'provider' ? [] : providers, archived)
-      }
-      const chooseProvider = (name) => {
-        const next = normalizeProviders(
-          providers.includes(name) ? providers.filter((entry) => entry !== name) : [...providers, name],
-        )
-        setProviders(next)
-        writePrefs({ providers: next })
-        writeUrlQuery(sort, dir, view, next, archived)
       }
       // The archive is one checkbox and one decision, and it is written down the
-      // way the sort is: the reader chose it, so it outlives the panel.
+      // way the sort is: the reader chose it, so it outlives the panel. It does not
+      // touch the selection — a scope nobody can see is not a scope a switch may
+      // edit, so the marks made under it come back exactly as they were left.
       const chooseArchive = (next) => {
         setArchived(next)
         writePrefs({ archived: next })
-        writeUrlQuery(sort, dir, view, applied, next)
-      }
-      // "Reset" resets the filter, and the archive is a filter: a button that
-      // lifted half of what the panel is filtering by would leave the reader
-      // hunting for the other half.
-      const clearFilter = () => {
-        setProviders([])
-        setArchived(false)
-        writePrefs({ providers: [], archived: false })
-        writeUrlQuery(sort, dir, view, [], false)
       }
 
-      // The provider filter, drawn only where it means something: in the
-      // provider view a row already is a provider.
-      const selected = React.useMemo(
-        () => (applied.length === 0 ? t('filter.all') : t('filter.selection', {
-          selected: fmt.count(applied.length),
-          total: fmt.count(knownProviders.length),
-        })),
-        [applied, knownProviders, t, fmt],
+      // --- the tree, and what a click in it means --------------------------------
+      //
+      // The catalog is the host's, from the last answer: the panel does not invent
+      // a tree out of the rows it was sent, because those rows are the selected ones
+      // and a tree that could only offer what is already ticked is not a tree. The
+      // checkboxes are the panel's own resolution of the stored rules over that
+      // catalog (see `resolveSelection`), which is the same rule the host applies.
+      const catalog = React.useMemo(
+        () => (Array.isArray(state.data?.catalog) ? state.data.catalog : []),
+        [state.data],
       )
+      const resolved = React.useMemo(() => resolveSelection(selection, catalog), [selection, catalog])
+      // One provider row's own numbers, for the two places that print "N of M":
+      // the tree's parent checkbox and the provider view's name cell. Both read the
+      // host's `coverage` when it is there, so the number beside a provider row is
+      // the host's own count of what it sent, not a second opinion about it.
+      const coverageOf = React.useMemo(() => {
+        const fromHost = Array.isArray(state.data?.coverage) ? state.data.coverage : null
+        const entries = fromHost ?? resolved.providers
+        const map = new Map()
+        for (const entry of entries) map.set(entry.provider, { selected: entry.selected, total: entry.total })
+        return map
+      }, [state.data, resolved])
+      const catalogTotal = resolved.providers.reduce((sum, entry) => sum + entry.total, 0)
+
+      const applySelection = (next) => {
+        setSelection(next)
+        writePrefs({ selection: next })
+      }
+      /**
+       * One model's checkbox.
+       *
+       * The exception is written only where the reader's wish differs from what the
+       * rules already say about that pair (see `inheritedPairState`), so a click
+       * under "all of this provider" leaves one exception behind and a click under
+       * "nothing selected" leaves nothing but the pair itself.
+       */
+      const choosePair = (scope, provider, model, on) => {
+        const inherited = inheritedPairState(selection, scope, provider, model, catalog)
+        applySelection(rulesWithPair(selection, scope, provider, model, on, inherited))
+      }
+      /**
+       * One provider's checkbox: all of it, none of it, or only the measured part.
+       *
+       * Which one is a function of where the group stands rather than of the click
+       * alone, so a click reads the host's own count and asks for the next state
+       * (`nextProviderRule`): a partial group is finished first, a full one is
+       * cleared, and an empty one comes back as its measured models. The rule it
+       * writes is what makes the group stay a decision — a model the provider gains
+       * later follows it.
+       */
+      const chooseProviderGroup = (scope, provider, rule, counts) => {
+        applySelection(rulesWithProvider(selection, scope, provider, nextProviderRule(rule, counts)))
+      }
+      const chooseEveryModel = (base) => {
+        applySelection(rulesForAll(selection, base, archived))
+      }
+      // "Reset" restores the rule a first open would have used, and it is a reset of
+      // the *selection* and not of a filter: clearing marks is `none`, and a button
+      // whose name is "back to the default" has to mean the default.
+      const resetSelection = () => {
+        applySelection(defaultSelectionRules())
+        say(t('announce.selection.reset'))
+      }
+      const selectionIsDefault = sameSelectionRules(selection, defaultSelectionRules())
       // What the host says the archive holds, and whether it can say at all.
       // `null` — a configuration this host could not read — and `undefined` — a
       // host that predates the field — both mean the control is not offered;
@@ -2518,94 +3390,220 @@ window.__ModuleLoader__.load({
                 t('filter.archive.count', { count: fmt.count(archiveRows) }),
               ),
             )
-      // The selection is bounded (see `MAX_PROVIDERS`), so the bound is a fact
-      // the control shows rather than one it applies behind the reader's back:
-      // at the cap the providers outside the selection stop taking marks, and
-      // the line under the list says why.
-      const atCap = providers.length >= MAX_PROVIDERS
-      const filterControl =
-        view === 'provider'
-          ? null
-          : h(
-              'details',
-              { className: 'dsh-ms-filter' },
+      // --- the models control -----------------------------------------------------
+      //
+      // One compact line above the table, and the tree behind a disclosure. The
+      // line is what the reader needs on every visit: how many of how many models
+      // the table is about. The reset is beside it and always visible — a control
+      // that appears only once the reader is already lost is not a way back — and
+      // it is inert while the selection already is the default.
+      //
+      // A row of chips was the alternative and it is the wrong shape here: a
+      // selection is a set the reader builds, and a chip per selected model turns
+      // the toolbar into a second table to read before the first one.
+      const search = treeQuery.trim().toLowerCase()
+      const matches = (text) => search === '' || String(text).toLowerCase().includes(search)
+      const treeGroups = []
+      for (const group of catalog) {
+        const models = group.models.filter((entry) => matches(entry.model) || matches(group.provider))
+        if (models.length === 0) continue
+        const counts = coverageOf.get(group.provider) ?? { selected: 0, total: group.models.length }
+        const partial = counts.selected > 0 && counts.selected < counts.total
+        const scope = group.models.some((entry) => entry.archived === true) ? 'archive' : 'live'
+        // The rule standing on the group, if any: the click reads it to know which
+        // step of its cycle this is, and the tree reads it to name the one state the
+        // marks cannot express — a hand-picked set of exactly the measured models
+        // looks the same, and the difference is what happens to a model nobody has
+        // run yet.
+        const rule = selection?.[scope]?.providers?.[group.provider]
+        const measured = rule === 'measured'
+        treeGroups.push(
+          h(
+            'div',
+            { className: 'dsh-ms-tree-group', key: group.provider },
+            h(
+              'label',
+              { className: 'dsh-ms-tree-parent' },
+              h('input', {
+                type: 'checkbox',
+                name: 'provider',
+                value: group.provider,
+                autoComplete: 'off',
+                checked: counts.selected === counts.total,
+                'aria-checked': partial ? 'mixed' : counts.selected === counts.total ? 'true' : 'false',
+                // A partial group is a real indeterminate control in the browser
+                // and a `data-state` a test can read: the state is not carried by
+                // colour, and it is stated as a number beside the name as well.
+                // `measured` is the one state the marks cannot express, so it is
+                // named ahead of the partial it usually comes with — the box is
+                // still indeterminate, and `aria-checked` still says so.
+                'data-state': measured ? 'measured' : partial ? 'partial' : counts.selected === counts.total ? 'all' : 'none',
+                ref: (element) => {
+                  if (element !== null && element !== undefined) element.indeterminate = partial
+                },
+                onChange: () => chooseProviderGroup(scope, group.provider, rule, counts),
+              }),
               h(
-                'summary',
-                { className: 'dsh-ms-chip' },
-                `${t('filter.label')}: ${selected}` +
-                  (archived ? ` + ${t('filter.archive.short')}` : ''),
+                'span',
+                { className: 'dsh-ms-tree-name', title: measured ? t('models.provider.measured') : undefined, translate: 'no' },
+                group.provider,
               ),
               h(
-                'div',
-                { className: 'dsh-ms-filter-panel', role: 'group', 'aria-label': t('filter.group') },
-                archiveControl,
-                knownProviders.length === 0
-                  ? h('div', { className: 'dsh-ms-filter-note' }, t('filter.empty'))
-                  : h(
-                      'div',
-                      { className: 'dsh-ms-filter-list' },
-                      ...knownProviders.map((entry) =>
-                        h(
-                          'label',
-                          { className: 'dsh-ms-filter-row', key: entry.provider },
-                          h('input', {
-                            type: 'checkbox',
-                            name: 'provider',
-                            value: entry.provider,
-                            autoComplete: 'off',
-                            checked: providers.includes(entry.provider),
-                            disabled: atCap && !providers.includes(entry.provider),
-                            onChange: () => chooseProvider(entry.provider),
-                          }),
-                          // Machine names are not phrases to hand to a translator.
-                          // The count beside the name is part of the checkbox's own
-                          // name through the label, so it is hidden from the reader
-                          // who hears one.
-                          h('span', { className: 'dsh-ms-filter-name', translate: 'no' }, entry.provider),
-                          h(
-                            'span',
-                            { className: 'dsh-ms-filter-count', 'aria-hidden': 'true' },
-                            Number.isFinite(entry.steps)
-                              ? t('filter.steps', { count: fmt.count(entry.steps) })
-                              : null,
-                          ),
-                        ),
-                      ),
+                'span',
+                { className: 'dsh-ms-tree-count' },
+                t('models.providerCount', {
+                  selected: fmt.count(counts.selected),
+                  total: fmt.count(counts.total),
+                }),
+              ),
+            ),
+            ...models.map((entry) =>
+              h(
+                'label',
+                { className: 'dsh-ms-tree-row', key: `${group.provider}\u0000${entry.model}` },
+                h('input', {
+                  type: 'checkbox',
+                  name: 'model',
+                  value: `${group.provider}\u0000${entry.model}`,
+                  autoComplete: 'off',
+                  checked: resolved.pairs.has(pairKeyOf(group.provider, entry.model)),
+                  onChange: () =>
+                    choosePair(
+                      scope,
+                      group.provider,
+                      entry.model,
+                      !resolved.pairs.has(pairKeyOf(group.provider, entry.model)),
                     ),
-                atCap
-                  ? h(
-                      'div',
-                      { className: 'dsh-ms-filter-note' },
-                      t('filter.cap', { max: fmt.count(MAX_PROVIDERS) }),
-                    )
+                }),
+                // The full pair, not the shortened label: a checkbox is where the
+                // reader decides which of two models with the same name is the one
+                // they mean, and the table's shortening is a rendering of a row
+                // that is already identified.
+                h(
+                  'span',
+                  { className: 'dsh-ms-tree-model', title: `${group.provider}/${entry.model}`, translate: 'no' },
+                  entry.model,
+                ),
+                entry.noStats === true
+                  ? h('span', { className: 'dsh-ms-nostats', title: t('hint.noStats') }, t('noStats.badge'))
                   : null,
-                applied.length === 0 && !archived
-                  ? null
-                  : h(
-                      'button',
-                      { type: 'button', className: 'dsh-ms-chip', onClick: clearFilter },
-                      t('filter.reset'),
-                    ),
+                entry.archived === true ? h('span', { className: 'dsh-ms-archive' }, t('archive.badge')) : null,
               ),
-            )
+            ),
+          ),
+        )
+      }
+
+      const selectionLine = h(
+        'span',
+        { className: 'dsh-ms-models-count', role: 'status', 'aria-live': 'polite' },
+        t('models.count', {
+          selected: fmt.count(resolved.pairs.size),
+          total: fmt.count(catalogTotal),
+        }),
+      )
+      const modelsControl = h(
+        'div',
+        { className: 'dsh-ms-models' },
+        h(
+          'details',
+          {
+            className: 'dsh-ms-filter',
+            open: treeOpen,
+            onToggle: (event) => setTreeOpen(event.currentTarget.open === true),
+          },
+          h(
+            'summary',
+            { className: 'dsh-ms-chip' },
+            t('models.open'),
+            selectionLine,
+            // The archive is part of the question and it lives inside the folded
+            // panel, so the folded panel has to say it is on: a count of selected
+            // models over a scope the reader cannot see would describe a different
+            // table than the one on screen.
+            archived ? h('span', { className: 'dsh-ms-filter-count' }, t('filter.archive.short')) : null,
+          ),
+          h(
+            'div',
+            { className: 'dsh-ms-filter-panel', role: 'group', 'aria-label': t('models.group') },
+            h('input', {
+              type: 'search',
+              className: 'dsh-ms-tree-search',
+              autoComplete: 'off',
+              placeholder: t('models.search'),
+              'aria-label': t('models.search'),
+              value: treeQuery,
+              onChange: (event) => setTreeQuery(event.target.value),
+            }),
+            h(
+              'div',
+              { className: 'dsh-ms-tree-actions' },
+              h(
+                'button',
+                { type: 'button', className: 'dsh-ms-chip', onClick: () => chooseEveryModel('all') },
+                t('models.selectAll'),
+              ),
+              h(
+                'button',
+                { type: 'button', className: 'dsh-ms-chip', onClick: () => chooseEveryModel('none') },
+                t('models.selectNone'),
+              ),
+            ),
+            treeGroups.length === 0
+              ? h('div', { className: 'dsh-ms-filter-note' }, t('models.empty'))
+              : h('div', { className: 'dsh-ms-tree' }, ...treeGroups),
+            archiveControl,
+          ),
+        ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsh-ms-chip',
+            'aria-disabled': selectionIsDefault,
+            onClick: () => {
+              if (selectionIsDefault) return
+              resetSelection()
+            },
+          },
+          t('models.reset'),
+        ),
+        // A browser that refuses to store anything is worth one sentence: without
+        // it the reader would tick models, close the panel, and find the default
+        // selection back with no explanation of what happened to their choice.
+        storageAvailable()
+          ? null
+          : h('span', { className: 'dsh-ms-filter-note' }, t('models.storage')),
+        // A host that could not read its own catalog grades nothing, and the tree it
+        // sent is the history alone. Saying so is the difference between "these are
+        // all the models you have" and "these are all I could see": without the
+        // sentence, a pair the configuration dropped and one it still serves look
+        // exactly alike, and the reader ticks the wrong one.
+        state.data !== null && state.data !== undefined && state.data.archive === null
+          ? h('span', { className: 'dsh-ms-filter-note' }, t('models.unknownCatalog'))
+          : null,
+      )
 
       // Sorting lives in the column headings, so the bar holds only the filter
       // and the toggles — nothing that would name a second place to sort from.
       //
-      // The two liveness buttons are the two halves of the same question. "Check
-      // stale only" is the cheap one and the one a repeat press benefits from: a
-      // fresh answer is not paid for twice, so clicking it again finishes a sweep
-      // that was interrupted. "Check all" is the explicit re-run, for when the
-      // reader does not trust a result from minutes ago.
+      // The two liveness buttons answer one question at two scopes: every configured
+      // model, or the ones the reader ticked. They used to be "all" and "the stale
+      // ones", and the second was the worse of the pair — what counted as stale was
+      // a five-minute window inside the host, so the button neither said what it
+      // would check nor let the reader predict the result. Both buttons now name
+      // their scope, and each says what it costs in its own tooltip, because the
+      // difference between them is one real request per model.
       // The bar is three clusters, and each one answers a different question:
       // what to compare (the filter), whether the models answer at all (the two
-      // halves of one probe question), and how to read the rows (the view and the
+      // scopes of one probe question), and how to read the rows (the view and the
       // column set). The caption is what makes a row of identical chips legible
       // as those three things rather than as six equal buttons.
+      const selectedCount = resolved.pairs.size
       const toolbar = h(
         'div',
         { className: 'dsh-ms-bar' },
-        filterControl,
+        modelsControl,
         h(
           'span',
           { className: 'dsh-ms-group' },
@@ -2615,6 +3613,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dsh-ms-chip',
+              title: t('hint.liveness.all'),
               'aria-disabled': liveRunning,
               onClick: () => {
                 if (liveRunning) return
@@ -2625,18 +3624,31 @@ window.__ModuleLoader__.load({
               ? t('liveness.pending', { count: fmt.count(liveJob.pending) })
               : t('action.liveness.all'),
           ),
+          // The selection is the reader's own, resolved over the catalog the host
+          // sent — the same resolution the tree's checkboxes are drawn from, so the
+          // button and the marks cannot disagree. It travels as the pairs
+          // themselves rather than as the rule document, because a check is a
+          // question about models and not about the configuration: the host probes a
+          // named pair whether or not its catalog still lists it and answers
+          // `NO_ROUTE`, which is the fact the reader wanted, where a rule resolved
+          // against a catalog would quietly leave that model out.
           h(
             'button',
             {
               type: 'button',
               className: 'dsh-ms-chip',
-              'aria-disabled': liveRunning,
+              title: t('hint.liveness.selected'),
+              // Nothing ticked is nothing to ask about, and a button that stays
+              // live while its question has no answer is a control the reader has
+              // to learn the hard way. It is disabled rather than removed: the
+              // scope it offers is the one this button is for.
+              'aria-disabled': liveRunning || selectedCount === 0,
               onClick: () => {
-                if (liveRunning) return
-                void startLiveness({ staleOnly: true })
+                if (liveRunning || selectedCount === 0) return
+                void startLiveness({ pairs: pairsOf(resolved.pairs) })
               },
             },
-            t('action.liveness.stale'),
+            t('action.liveness.selected'),
           ),
         ),
         h('span', { style: { flex: '1 0 auto' } }),
@@ -2662,6 +3674,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dsh-ms-chip',
+              title: t('hint.columns.all'),
               'aria-pressed': showAllColumns,
               onClick: () => {
                 const next = !showAllColumns
@@ -2688,7 +3701,7 @@ window.__ModuleLoader__.load({
       // not-yet-reloaded host cannot serve — a heading added by a newer panel —
       // would draw its arrow over rows that are in a different order, and say so
       // to a screen reader besides.
-      const answered = state.dataQuery === queryKey(sort, dir, view, applied, archived)
+      const answered = state.dataQuery === queryKey(sort, dir, view, selection, archived)
       const orderOnScreen =
         answered && typeof state.data?.sort === 'string' ? state.data.sort : sort
 
@@ -2765,6 +3778,16 @@ window.__ModuleLoader__.load({
           const cell = livenessView(row, liveOverrides, checkingSet, t, fmt)
           const ctx = {
             view, best: ranked.best, worst: ranked.worst, t, fmt, scale,
+            // The identity cell draws the table's one disclosure, and it is drawn
+            // only in the expanded column set: it is a fact about the answer to
+            // "all metrics", not about the answer to "which model".
+            showDetails: showAllColumns,
+            // What the provider view prints beside a provider: how many of that
+            // provider's models the selection holds. It is the host's own count
+            // (`coverage`), so the number in the row and the rows under it are one
+            // statement — a partial provider is visibly partial rather than reading
+            // as a provider that is simply quiet.
+            coverage: coverageOf,
             renderLiveness() {
               // An unclassified failure has no word of its own and prints the host's
               // status; everything else is this panel's own copy.
@@ -2836,13 +3859,41 @@ window.__ModuleLoader__.load({
 
       const totals = state.data?.totals
       const pending = state.data?.pending ?? 0
-      // What the filter kept, as the host counted it over the filtered rows.
-      // Only shown when a filter is on: without one it would repeat the totals
-      // line, and the totals line is about the whole history, not the table.
+      // What the selection kept, as the host counted it over the selected rows —
+      // counted before the limit cut them, which is why it is the host's number and
+      // not the number of rows on screen. Only shown when a selection is on: without
+      // one it would repeat the totals line, and the totals line is about the whole
+      // history, not the table.
+      const selectedSome = state.data?.selection !== null && state.data?.selection !== undefined
       const shown =
-        applied.length > 0 && state.data !== null && state.data !== undefined && state.data.shown
+        selectedSome && state.data !== null && state.data !== undefined && state.data.shown
           ? { view, models: state.data.shown.models, steps: state.data.shown.steps }
           : null
+      // A selection the page cannot hold in full. The panel says how many rows the
+      // selection has and offers to ask for all of them, rather than letting a
+      // truncated table read as the whole answer — the one thing a table that lists
+      // what the reader chose must not do.
+      const truncated = state.data?.truncated === true && wholeSelection === false
+      const truncationNotice = truncated
+        ? h(
+            'div',
+            { className: 'dsh-ms-filter-note', role: 'status' },
+            t('models.truncated', {
+              shown: fmt.count(rows.length),
+              total: fmt.count(state.data?.shown?.models ?? rows.length),
+            }),
+            ' ',
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsh-ms-chip',
+                onClick: () => setWholeSelection(true),
+              },
+              t('models.showAll'),
+            ),
+          )
+        : null
       // A real `disabled` takes the button out of the tab order and drops the
       // focus of whoever just pressed it. The busy state is expressed with
       // aria-disabled plus a guarded handler instead, so the control stays
@@ -2878,20 +3929,19 @@ window.__ModuleLoader__.load({
       // panel says which wait it is in instead of passing the old order off as
       // the new one. The filter is named with it — a stale table of every
       // provider must not be read as a stale table of the selected ones.
-      const currentKey = queryKey(sort, dir, view, applied, archived)
+      const currentKey = queryKey(sort, dir, view, selection, archived)
       const behind = state.data !== null && state.data !== undefined && state.dataQuery !== currentKey
       const sortLabel = orderName(sort)
-      // The archive is named here for the same reason the provider selection is:
-      // a stale table of every model must not be read as a stale table of the
-      // ones the reader asked for, and "the archive is on" is part of what was
-      // asked for. The provider half is dropped when nothing is selected, so the
-      // note of an archive-only filter reads as the one thing it filtered by.
+      // The selection is named here for the same reason the archive is: a stale
+      // table of every model must not be read as a stale table of the ones the
+      // reader asked for. The selection half is dropped when it is the default, so
+      // the note of an archive-only question reads as the one thing it asked about.
       const filterParts = [
-        applied.length === 0
+        selectionIsDefault
           ? null
-          : t('filter.note', {
-              selected: fmt.count(applied.length),
-              total: fmt.count(knownProviders.length),
+          : t('models.note', {
+              selected: fmt.count(resolved.pairs.size),
+              total: fmt.count(catalogTotal),
             }),
         archived ? t('filter.archive.short') : null,
       ].filter((part) => part !== null)
@@ -2900,7 +3950,12 @@ window.__ModuleLoader__.load({
       const kind = contentKind(rows, state)
       let content
       if (kind === 'table') {
-        content = h('div', { className: 'dsh-ms-wrap' }, h('table', { className: 'dsh-ms-table' }, header, body))
+        content = h(
+          'div',
+          { className: 'dsh-ms-wrap' },
+          truncationNotice,
+          h('table', { className: 'dsh-ms-table' }, header, body),
+        )
       } else if (kind === 'error') {
         // A failure wears the alert's shape in the error's own colour: a request
         // that got no answer is not a warning to live with, and it is not an
@@ -2915,26 +3970,41 @@ window.__ModuleLoader__.load({
       } else {
         content = h(
           'div',
-          { className: 'dsh-ms-empty' },
-          // An empty table under a filter is not an empty history, and telling
-          // the user to go work in a session is the wrong advice: the sessions
-          // are there, just not the ones behind the selected providers. The
-          // archive is asked first because it is the only one of the two that
-          // names its own remedy — a table emptied by the archive is one
-          // checkbox away from having rows.
-          archiveRows > 0 && !archived
-            ? t('empty.archived', {
-                count: fmt.count(archiveRows),
-                archive: t('filter.archive.short'),
-              })
-            : applied.length > 0
-              ? t('empty.filtered')
-              : pending > 0
-                ? t('empty.pending', {
-                    scanned: fmt.count(state.data.scanned),
-                    pending: fmt.count(pending),
-                  })
-                : t('empty.nodata'),
+          { className: 'dsh-ms-empty', role: 'status' },
+          // Four different emptinesses, and the order they are asked in is the
+          // order of how actionable they are. An empty *selection* comes first: it
+          // is the one state the reader caused and can undo in one click, and a
+          // panel that answered it with "no measurements in the history" would be
+          // telling them to go and work in a session that is already there. Then the
+          // archive, the only other state that names its own remedy — a table
+          // emptied by the archive is one checkbox away from having rows. Then the
+          // selection that kept nothing from a history that has rows, and last the
+          // history itself.
+          resolved.pairs.size === 0
+            ? h(
+                'span',
+                null,
+                t('empty.selection'),
+                ' ',
+                h(
+                  'button',
+                  { type: 'button', className: 'dsh-ms-chip', onClick: resetSelection },
+                  t('models.resetDefault'),
+                ),
+              )
+            : archiveRows > 0 && !archived
+              ? t('empty.archived', {
+                  count: fmt.count(archiveRows),
+                  archive: t('filter.archive.short'),
+                })
+              : selectedSome
+                ? t('empty.selected')
+                : pending > 0
+                  ? t('empty.pending', {
+                      scanned: fmt.count(state.data.scanned),
+                      pending: fmt.count(pending),
+                    })
+                  : t('empty.nodata'),
         )
       }
 
@@ -3061,7 +4131,28 @@ window.__ModuleLoader__.load({
       // and `tools/verify-panel-state.mjs` drives the registered page instead of
       // describing it. The module loader reads `inject` and `apply` and ignores
       // everything else.
-      __test__: { MESSAGES, contentKind, querySwitched, queryAnswered, queryFailed },
+      // The pure half of the selection, exported so the suite can pin it against the
+      // host's own resolution of the same rule over the same catalog: two
+      // implementations of one precedence is the drift this file cannot afford, and
+      // a test that only clicked checkboxes would not notice it.
+      __test__: {
+        MESSAGES,
+        // The map of natural directions, so a test can pin it against the fold's
+        // own `SORT_DIRECTIONS`: the two cannot import each other, and the copy is
+        // the one that drifts silently — a heading that starts a key at the wrong
+        // end shows the opposite of what every other heading does on its first
+        // click, and nothing else in the suite asks which end that is.
+        SORT_DIRS,
+        contentKind,
+        querySwitched,
+        queryAnswered,
+        queryFailed,
+        canonicalSelectionRules,
+        normalizeSelectionRules,
+        panelQueryBody,
+        resolveSelection,
+        sameSelectionRules,
+      },
     }
   },
 })

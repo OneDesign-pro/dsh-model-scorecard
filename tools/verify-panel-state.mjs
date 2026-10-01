@@ -29,6 +29,10 @@ import vm from 'node:vm'
 // order and shown under an arrow claiming otherwise, and only a shared list
 // catches that.
 import { PANEL_SORTS } from '../lib/collect.js'
+// The fold's own map of natural directions, compared below against the copy the
+// bundle declares. The two cannot import each other (the client is a browser
+// bundle with no module resolution into `lib/`), so they are pinned from here.
+import { SORT_DIRECTIONS } from '../lib/fold.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, '..', 'client.js'), 'utf8')
@@ -38,6 +42,27 @@ function check(label, condition, detail) {
   const mark = condition ? 'OK  ' : 'FAIL'
   if (!condition) failures += 1
   console.log(`${mark} ${label}${detail ? ` — ${detail}` : ''}`)
+}
+
+// Parse before anything else, and before any fixture exists.
+//
+// The whole stylesheet is the value of a template literal — `const css = \`…\`` —
+// so one backtick inside a CSS comment ends the literal early, the rest of the
+// stylesheet is parsed as JavaScript, and `client.js` does not load at all: the
+// Plugins page then says only that the plugin did not activate, and this suite
+// used to abort deep inside the module loader with whatever case it happened to be
+// running left unnamed. One parse of a file this tool is about to load anyway
+// names the file and the line instead. It is not a substitute for the checks below
+// (nothing else catches this if the file never loads) — it is the one that reports
+// it first, in half a second and with no fixtures.
+console.log('--- разбор самого файла панели ---')
+try {
+  new vm.Script(source, { filename: 'client.js' })
+  check('client.js разбирается как скрипт', true, `${source.split('\n').length} строк`)
+} catch (error) {
+  check('client.js разбирается как скрипт', false, error.message)
+  console.log('\nПРОВАЛЕНО ПРОВЕРОК: 1')
+  process.exit(1)
 }
 
 // --- a React small enough to read -------------------------------------------
@@ -200,14 +225,41 @@ const textOf = (node) => texts(node).join(' ')
 const text = (tree) => texts(tree).join(' ')
 const hasTable = (tree) => nodesWhere(tree, (node) => node.type === 'table').length > 0
 
-/** The model column of every rendered row, in order. */
+/** The text a sighted reader sees in one cell: the hidden sentences are dropped.
+ *
+ * `columnCells` keeps the screen-reader text because most assertions want the
+ * whole cell; the rating column is the one that carries a paragraph in a hidden
+ * span, and a check about the printed figure has to read the figure. */
+const visibleText = (node) => {
+  const parts = []
+  walk(node, (n) => {
+    if (String(n.props?.className ?? '').includes('dsh-ms-sr-only')) return
+    for (const child of n.props?.children ?? []) if (typeof child === 'string') parts.push(child)
+  })
+  return parts.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+/** The model column of every rendered row, in order.
+ *
+ * It reads the name span and not the whole cell: the identity cell is also where
+ * the expanded column set folds the route's own detail under the name, and a
+ * helper that returned that paragraph would make every order assertion in this
+ * file a comparison of prose. What the assertions mean by "the row" is the label
+ * the reader sorts by. */
 const rowLabels = (tree) => {
   const table = nodesWhere(tree, (node) => node.type === 'table')[0]
   if (table === undefined) return []
   const body = nodesWhere(table, (node) => node.type === 'tbody')[0]
   return (body?.props.children ?? [])
     .filter((child) => typeof child === 'object' && child?.type === 'tr')
-    .map((row) => textOf(row.props.children[0]).replace(/\s+/g, ' ').trim())
+    .map((row) => {
+      const cell = row.props.children[0]
+      const name = nodesWhere(
+        cell,
+        (node) => String(node.props?.className ?? '') === 'dsh-ms-model-name',
+      )[0]
+      return textOf(name ?? cell).replace(/\s+/g, ' ').trim()
+    })
 }
 
 /** A button anywhere in the panel whose text contains `label`. */
@@ -237,27 +289,55 @@ const ariaSort = (tree, key) => headingFor(tree, key)?.props['aria-sort']
  */
 const headingText = (th) => text(th).replace(/[▲▼]/g, '').replace(/\s+/g, ' ').trim()
 
-// --- the provider filter ------------------------------------------------------
+// --- the selection tree -------------------------------------------------------
 
-/** The control's own summary: what the filter currently is, in one line. */
+const treeNodes = (tree) => nodesWhere(tree, (node) => String(node.props?.className ?? '').startsWith('dsh-ms-tree')) ?? []
+
+/** The controls' summary line: the count, behind which the tree is folded. */
 const filterSummary = (tree) => nodesWhere(tree, (node) => node.type === 'summary')[0]
 
-/**
- * Every provider the filter offers, in the order it offers them.
- *
- * The archive's own row wears the same styling and is not a provider, so the
- * name on its checkbox is what tells the two apart: a helper that read both would
- * report the archive as a provider the filter can compare.
- */
-const filterOptions = (tree) =>
-  nodesWhere(
-    tree,
-    (node) =>
-      node.props?.className === 'dsh-ms-filter-row' &&
-      node.props.children[0]?.props?.name === 'provider',
-  )
+/** The line that says how much of the catalog the table is about, or null. */
+const modelsCount = (tree) =>
+  nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-models-count')[0] ?? null
 
-/** The archive's own row in the filter panel, or null when there is none. */
+/** Every provider row the tree offers, in the order it offers them. */
+const treeParents = (tree) =>
+  nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-tree-parent')
+
+/** Every model row the tree offers. */
+const treeRows = (tree) => nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-tree-row')
+
+/** The name a tree row wears — the provider for a parent, the model for a child. */
+const treeName = (node) =>
+  (node.props.children.find((child) => String(child?.props?.className ?? '').startsWith('dsh-ms-tree-'))
+    ?.props.children ?? []).join('')
+
+const treeParent = (tree, provider) => treeParents(tree).find((node) => treeName(node) === provider)
+
+/** The checkbox of a row — the first child, always. */
+const treeCheck = (node) => node?.props.children[0] ?? null
+
+/** The tooltip a tree row's name carries, or undefined when it carries none. */
+const treeHint = (node) =>
+  node?.props.children.find((child) => String(child?.props?.className ?? '').startsWith('dsh-ms-tree-name'))
+    ?.props.title
+
+/** The checkbox of one model, found by its full `provider\0model` value. */
+const modelCheck = (tree, provider, model) =>
+  treeCheck(treeRows(tree).find((node) => node.props.children[0]?.props?.value === `${provider}\u0000${model}`))
+
+/** Every model checkbox that is ticked, as `provider/model`, sorted. */
+const checkedModels = (tree) =>
+  treeRows(tree)
+    .filter((node) => node.props.children[0].props.checked === true)
+    .map((node) => String(node.props.children[0].props.value).replace('\u0000', '/'))
+    .sort()
+
+/** The ticked models of one provider — what its own checkbox has to account for. */
+const checkedModelsOf = (tree, provider) =>
+  checkedModels(tree).filter((name) => name.startsWith(`${provider}/`))
+
+/** The archive's own row in the panel, or null when there is none. */
 const archiveRow = (tree) =>
   nodesWhere(tree, (node) => String(node.props?.className ?? '').includes('dsh-ms-filter-archive'))[0] ??
   null
@@ -265,20 +345,8 @@ const archiveRow = (tree) =>
 /** Its checkbox — the first child of the row, as for a provider. */
 const archiveCheck = (tree) => archiveRow(tree)?.props.children[0] ?? null
 
-const optionName = (option) =>
-  (option.props.children.find((child) => child?.props?.className === 'dsh-ms-filter-name')?.props
-    .children ?? []).join('')
-
-const filterOption = (tree, name) => filterOptions(tree).find((option) => optionName(option) === name)
-
-/** The checkbox of one provider — the first child of its row, always. */
-const filterCheck = (tree, name) => filterOption(tree, name).props.children[0]
-
-const filterChecked = (tree) =>
-  filterOptions(tree)
-    .filter((option) => option.props.children[0].props.checked === true)
-    .map(optionName)
-    .sort()
+/** The tree's own search box. */
+const treeSearch = (tree) => nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-tree-search')[0] ?? null
 
 /** Every rendered row, as its list of cells. */
 const bodyRows = (tree) => {
@@ -304,10 +372,58 @@ const headings = (tree) => nodesWhere(tree, (node) => node.type === 'th')
 
 const NOTICE = 'Показан прежний ответ'
 
+// --- what was asked ---------------------------------------------------------------
+//
+// The panel asks its question in the body of a POST and no longer in the address: a
+// selection is a rule document, which does not belong in a query string. So every
+// check that used to compare a request line compares the body instead — and it
+// compares the whole of it, because the point of these assertions is that one click
+// asks one question and asks all of it.
+const sentBody = (view, n) => {
+  const request = view.requests[n]
+  if (request === undefined || request.body === undefined || request.body === null) return null
+  // The fake transport parses the body as it records it; a raw string is accepted
+  // too, so the helper reads the same request whether it is driven through the fake
+  // or through a real `fetch`.
+  if (typeof request.body === 'object') return request.body
+  try {
+    return JSON.parse(request.body)
+  } catch {
+    return null
+  }
+}
+
+/** What request `n` was, for the detail line of a failing check. */
+const describe = (view, n) => {
+  const request = view.requests[n]
+  if (request === undefined) return `запроса ${n} нет`
+  return `${request.method ?? 'GET'} ${request.url} ${JSON.stringify(request.body ?? null)}`
+}
+
+/** Whether request `n` is the panel's own question, asked exactly as `want` says. */
+const askedFor = (view, n, want) => {
+  const request = view.requests[n]
+  if (request === undefined) return false
+  if (request.method !== 'POST' || request.url !== '/api/model-stats/query') return false
+  const body = sentBody(view, n)
+  if (body === null) return false
+  const expected = { view: 'model', limit: 200, archived: false, ...want }
+  if (body.sort !== expected.sort || body.dir !== expected.dir) return false
+  if (body.view !== expected.view || body.limit !== expected.limit) return false
+  if (body.archived !== expected.archived) return false
+  if (
+    expected.selection !== undefined &&
+    JSON.stringify(body.selection) !== JSON.stringify(expected.selection)
+  ) {
+    return false
+  }
+  return true
+}
+
 // --- fixtures ---------------------------------------------------------------
 
 /** One panel row, with the fields the visible columns read. */
-function row(provider, model, { steps = 1, ttftMedian = null, tpsMedian = null, errors = 0, lastSeen = 0, liveness = null, livenessChecking = false, archived = null, noStats = false } = {}) {
+function row(provider, model, { steps = 1, ttftMedian = null, tpsMedian = null, errors = 0, lastSeen = 0, liveness = null, livenessChecking = false, archived = null, noStats = false, e2eTpsMedian = null, errorRate = null, retryRate = null, prefillShareMedian = null, rating = null, routeMetadata = null } = {}) {
   return {
     provider,
     model,
@@ -326,6 +442,17 @@ function row(provider, model, { steps = 1, ttftMedian = null, tpsMedian = null, 
     tpsMin: tpsMedian,
     tpsMax: tpsMedian,
     tpsCount: steps,
+    // The two figures the short column set scales beside the response: the
+    // end-to-end rate and the errors per 100 steps. Absent from the host's payload
+    // before those columns existed, so the fixture spells them out with `null`
+    // rather than leaving them undefined — a bar is drawn from a measurement, and
+    // "no measurement" is not `0`.
+    e2eTpsMedian,
+    errorRate,
+    // And the two columns that ask for a bar the panel does not draw: they are here
+    // so a case can prove the decision holds rather than that the fields are missing.
+    retryRate,
+    prefillShareMedian,
     speedConfidence: 0.9,
     llmMeanMs: 1200,
     outputTokens: 4000,
@@ -340,10 +467,62 @@ function row(provider, model, { steps = 1, ttftMedian = null, tpsMedian = null, 
     // And whether the row exists only because the configuration serves the pair:
     // `true` on a row the history has no step for, `false` on every other one.
     noStats,
+    // The two fields the compact set's verdict column and its disclosure read.
+    // `null` on both is the shape a host that predates them sends, so a case that
+    // wants a truly old payload deletes the fields instead of passing nothing.
+    rating,
+    routeMetadata,
   }
 }
 
-function payload(sort, rows, { providers = [], providerList = null, archive = null, noStats = null } = {}) {
+// The tree's catalog: the three providers of the fixture, one configured model
+// nobody has run, and one whole provider the history has never seen. `noStats`
+// entries are the reason a selection has to be a rule and not a list of pairs:
+// they are in the tree before they are in any answer.
+const CATALOG = [
+  {
+    provider: 'codex',
+    models: [
+      { model: 'gpt-6-astra', archived: false, noStats: false, steps: 106 },
+      { model: 'gpt-6-mini', archived: false, noStats: true, steps: 0 },
+    ],
+  },
+  { provider: 'local-uns', models: [{ model: 'Ornith-9B', archived: false, noStats: false, steps: 28 }] },
+  { provider: 'openrouter', models: [{ model: 'glm-5.3-flash', archived: false, noStats: false, steps: 5 }] },
+  { provider: 'ollama', models: [{ model: 'llama-local', archived: false, noStats: true, steps: 0 }] },
+]
+
+/** The rule a first open uses: measured models, no archive. */
+const DEFAULT_SELECTION = {
+  live: { base: 'measured', providers: {}, pairs: {} },
+  archive: { base: 'none', providers: {}, pairs: {} },
+}
+
+/** One rule document, spelled out of the defaults so a case names only its delta. */
+function rules({ base = 'measured', providers = {}, pairs = {}, archiveBase = 'none', archivePairs = {} } = {}) {
+  return {
+    live: { base, providers, pairs },
+    archive: { base: archiveBase, providers: {}, pairs: archivePairs },
+  }
+}
+
+/**
+ * The cache key the panel writes for one question.
+ *
+ * Written out here rather than imported: the verifier drives the shipped client,
+ * and a key built by the same function under test would agree with it by
+ * construction — including when both are wrong about what a question is.
+ */
+function cacheKey(sort, dir, view, { selection = DEFAULT_SELECTION, archived = false } = {}) {
+  const base = `${sort}.${dir}|${view}|${JSON.stringify(selection)}`
+  return archived === true ? `${base}|archive` : base
+}
+
+function payload(
+  sort,
+  rows,
+  { providers = [], providerList = null, archive = null, noStats = null, catalog = CATALOG, selection = DEFAULT_SELECTION, coverage = null, truncated = false } = {},
+) {
   return {
     ok: true,
     empty: false,
@@ -383,15 +562,31 @@ function payload(sort, rows, { providers = [], providerList = null, archive = nu
     // history behind them — `null` for that same unreadable host, which is the
     // one statement it has no standing to make either.
     noStats,
+    // The tree the reader builds their selection in, and the rule document the
+    // host applied to answer this question. Both are what the panel draws the
+    // controls from, so a fixture that omitted them would test a tree with nothing
+    // in it.
+    catalog,
+    selection,
+    coverage,
+    truncated,
     rows,
   }
 }
 
-/** The payload the host sends for a filtered query, and the rows it keeps. */
+/**
+ * The payload the host sends for a question about some providers only.
+ *
+ * The rows are the selected ones and the echoed rule is what selected them: the
+ * panel reads the echo, not the rows, to decide whether the table is a subset of
+ * the history worth reporting in the footer.
+ */
 function filtered(sort, rows, names, { providerList = PROVIDER_LIST } = {}) {
+  const providers = {}
+  for (const name of names) providers[name] = 'all'
   return payload(sort, rows.filter((entry) => names.includes(entry.provider)), {
-    providers: names,
     providerList,
+    selection: rules({ providers }),
   })
 }
 
@@ -428,13 +623,46 @@ const bySpeed = payload(
  * Loads `client.js` into its own context and renders the bundle page it
  * registers. Every store and transport starts empty, so a case says exactly what
  * the panel already has before it is asked anything.
+ *
+ * `clock` freezes the panel's own `Date.now()`. It exists for the one rule that is
+ * a comparison against the current time — the age mark on a rating — where a case
+ * has to sit exactly on the boundary, and a real clock cannot be made to sit
+ * anywhere: the fixture's `Date.now()` and the panel's are different instants, so
+ * a case one millisecond from the threshold is a coin toss. Only the panel's clock
+ * is frozen; the tool's own fixtures stay on the real one.
  */
-function mountPanel({ entries = null, prefs = null, instantDeadline = false, search = '' } = {}) {
+function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPrefs = null, brokenStorage = false, instantDeadline = false, search = '', locale = null, clock = null } = {}) {
   const store = new Map()
-  if (entries !== null) store.set('dsh-model-stats:v1', JSON.stringify({ entries }))
+  if (entries !== null) store.set('dsh-model-stats:v3', JSON.stringify({ entries }))
+  // The store the previous build wrote, for the one case that asks what the panel
+  // does when it finds one: a v2 entry answers the same question with rows that
+  // have no rating in them, and serving it would print a column of dashes off an
+  // answer nobody can tell apart from a current one. Never seed both — a panel
+  // that found a v3 document would never look at the old key, and a case that
+  // seeded both would be testing the other branch.
+  if (legacyStore !== null) store.set('dsh-model-stats:v2', JSON.stringify(legacyStore))
   // State-machine scenarios exercise every sortable heading. Compact layout
   // has its own assertion below and explicitly opts out of the expanded set.
-  store.set('dsh-model-stats:prefs:v1', JSON.stringify({ columnsAll: true, ...prefs }))
+  // Either a v2 store or the one the previous build wrote — never both: a panel
+  // that found a v2 document would never look at the old key, and a case that
+  // seeded both would be testing the wrong branch.
+  if (legacyPrefs !== null) store.set('dsh-model-stats:prefs:v1', JSON.stringify(legacyPrefs))
+  else store.set('dsh-model-stats:prefs:v2.selection', JSON.stringify({ version: 2, columnsAll: true, ...prefs }))
+  // A browser that refuses to store anything is a real case on a locked-down
+  // profile, and the panel has to work in memory and say so.
+  const storage = brokenStorage
+    ? {
+        getItem: () => null,
+        removeItem: () => {},
+        setItem: () => {
+          throw new Error('storage is disabled')
+        },
+      }
+    : {
+        getItem: (key) => (store.has(key) ? store.get(key) : null),
+        setItem: (key, value) => store.set(key, String(value)),
+        removeItem: (key) => store.delete(key),
+      }
 
   const requests = []
   // Every address the panel writes, in order. The question lives in the address
@@ -450,13 +678,16 @@ function mountPanel({ entries = null, prefs = null, instantDeadline = false, sea
         registration = mod
       },
     },
-    localStorage: {
-      getItem: (key) => (store.has(key) ? store.get(key) : null),
-      setItem: (key, value) => store.set(key, String(value)),
-      removeItem: (key) => store.delete(key),
-    },
+    localStorage: storage,
     location: { search, href: `https://host/plugins${search}` },
     history: { replaceState: (_state, _title, url) => addresses.push(String(url)) },
+  }
+  // A frozen clock, when a case asks for one: `new Date(...)` still works (the
+  // proxy only answers `now`), so a panel that formats a timestamp is unaffected.
+  if (clock !== null) {
+    sandbox.Date = new Proxy(Date, {
+      get: (target, property, receiver) => (property === 'now' ? () => clock : Reflect.get(target, property, receiver)),
+    })
   }
   // The panel's own deadline, fired at once when a case asks for it: waiting
   // sixty seconds to prove that a timeout does not leave a spinner up forever
@@ -515,8 +746,35 @@ function mountPanel({ entries = null, prefs = null, instantDeadline = false, sea
 
   const sections = []
   let i18n = null
+  // The host's locale service, when a case asks for one. It is the smallest thing
+  // that satisfies the two calls the panel makes — `register(namespace, tag, dict)`
+  // at bind time and `bind(namespace)` for a translator — plus the active tag the
+  // panel reads to pick a number format. Without it the panel keeps its own copy,
+  // which is the branch every other case exercises.
+  const dictionaries = {}
+  const localeService =
+    locale === null
+      ? undefined
+      : {
+          register(namespace, tag, dict) {
+            dictionaries[tag] = { ...(dictionaries[tag] ?? {}), [namespace]: dict }
+          },
+          bind(namespace) {
+            return (key, params) => {
+              const template = dictionaries[this.active]?.[namespace]?.[key] ?? key
+              if (params === undefined) return template
+              return template.replace(/\{(\w+)\}/g, (match, name) =>
+                name in params ? String(params[name]) : match,
+              )
+            }
+          },
+          active: locale,
+          getSnapshot: () => ({ active: locale }),
+          subscribe: () => () => {},
+        }
   mod.apply({
     get(name) {
+      if (name === 'locale') return localeService
       if (name !== 'slots') return undefined
       return {
         inject: (slot, register) => {
@@ -562,12 +820,536 @@ function mountPanel({ entries = null, prefs = null, instantDeadline = false, sea
 
 console.log('--- краткий набор и группы ---')
 {
+  // The compact set is still six columns wide: the rating pays for itself out of
+  // «ош./100», which moves to the expanded set rather than the table growing a
+  // seventh column. Written out as a list, not as a count, because the count is
+  // what stays true while a column the reader never asked for replaces one they
+  // did.
   const view = mountPanel({ prefs: { columnsAll: false } })
   await view.pump()
   view.requests[0].answer(byTtft)
   const tree = await view.pump()
-  check('краткий вид: отклик, e2e и ошибки на 100 шагов',
-    headings(tree).map((th) => th.props.key).join(',') === 'name,liveness,steps,ttft,e2e,errorRate')
+  check('краткий вид: статус, рейтинг, отклик и e2e',
+    headings(tree).map((th) => th.props.key).join(',') === 'name,liveness,rating,steps,ttft,e2e',
+    headings(tree).map((th) => th.props.key).join(','))
+  check('и ошибок на 100 шагов в нём больше нет', !headingFor(tree, 'errorRate'))
+}
+
+// --- рейтинг: колонка, причина «-» и «Подробнее» -------------------------------
+//
+// The rating is the one column whose figure is a verdict, so what is asserted
+// here is that the panel publishes it the way the host wrote it and explains
+// every way it can be missing: one decimal through the shared formatter (a raw
+// `toFixed` would print `72.2` in a Russian panel), a mark for a score whose
+// evidence is thin and a second one for a score whose evidence has aged out, and
+// a sentence for each of the four reasons a `-` can have.
+console.log('')
+console.log('--- рейтинг: одно число, четыре причины и «Подробнее» ---')
+
+/** The width of the bar in each row of one column, or null where none is drawn. */
+function barsOf(tree, key) {
+  const head = nodesWhere(tree, (node) => node.type === 'thead')[0]
+  const cells = (head?.props.children ?? []).flatMap((line) => line?.props?.children ?? [])
+  const column = cells.findIndex((cell) => cell?.props?.key === key)
+  if (column === -1) return []
+  return bodyRows(tree).map((row) => {
+    const scale = nodesWhere(
+      row.props.children[column],
+      (node) => node.props?.className === 'dsh-ms-scale',
+    )[0]
+    return scale?.props?.children?.[0]?.props?.style?.width ?? null
+  })
+}
+{
+  /** A published rating, in the shape `lib/rating.js` returns. */
+  const rated = (score, { provisional = false, reason = null, anchor = Date.now() - 86_400_000 } = {}) => ({
+    version: 'technical-v1',
+    score,
+    reason,
+    provisional,
+    anchor,
+    qualifiedSamples: 24,
+    answeredSamples: 26,
+    excludedRetried: 2,
+    excludedInterrupted: 1,
+    effectiveSamples: 21.5,
+    sessions: 4,
+    coverage: 24 / 26,
+    inputs: { tpsMedian: 41.25, ttftMedianMs: 3180, ttftP90Ms: 9420 },
+    components: { throughput: 0.292, latency: 0.611, tailLatency: 0.614 },
+  })
+  const withRating = payload('ttft', [
+    row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, rating: rated(72.23415362384071, { provisional: true }) }),
+    row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, rating: rated(48.5) }),
+    // The real null: a pair the history holds and never qualified a measurement
+    // for. It is an object with a reason, not a missing field.
+    row('local-uns', 'Ornith-9B', { steps: 28, ttftMedian: 46, rating: rated(null, { reason: 'insufficient_samples' }) }),
+    // The other caveat, and the one a reader cannot see in the number: a score
+    // whose newest usable measurement is forty days old. It keeps its score —
+    // freshness is descriptive — and wears the age mark.
+    row('codex', 'gpt-5-old', { steps: 40, ttftMedian: 2000, rating: rated(61, { anchor: Date.now() - 40 * 86_400_000 }) }),
+  ], { providerList: PROVIDER_LIST })
+
+  const view = mountPanel({ prefs: { columnsAll: true } })
+  await view.pump()
+  view.requests[0].answer(withRating)
+  const tree = await view.pump()
+  const cells = columnCells(tree, 'rating')
+  // The visible figure, not the whole cell: the cell also carries its explanation
+  // in a hidden span, which is the sentence a hover and a screen reader get.
+  const printed = bodyRows(tree).map((row) => {
+    const column = headings(tree).findIndex((th) => th.props.key === 'rating')
+    return visibleText(row.props.children[column])
+  })
+
+  // 72.23415362384071 through `Intl.NumberFormat('ru', {1,1})` is «72,2»; the raw
+  // value would have been «72.2», and the guide's own fixture calls for one digit.
+  check('рейтинг нарисован с одним знаком через форматтер панели', printed[0] === '72,2 ~', JSON.stringify(printed[0]))
+  check('оценка без пометки — просто число', printed[1] === '48,5', JSON.stringify(printed[1]))
+  check('нет рейтинга — прочерк, а не ноль', printed[2] === '-', JSON.stringify(printed[2]))
+  // Forty days is past the 30 the formula's half-life uses, so the score is kept
+  // and the age is marked: no freshness multiplier touches it (the host asserts
+  // that side), and the reader is told the number describes the past.
+  check('старый замер помечен, а оценка осталась', printed[3] === '61,0 *', JSON.stringify(printed[3]))
+  check(
+    'и подсказка к старому замеру объясняет пометку',
+    textOf(bodyRows(tree)[3]).includes('самому новому подходящему замеру больше 30 дней'),
+    textOf(bodyRows(tree)[3]).slice(-160),
+  )
+  check(
+    'в «Подробнее» это сказано отдельной строкой',
+    textOf(nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-details')[3]).includes(
+      'это оценка по истории, а не по свежим данным',
+    ),
+  )
+  check(
+    'клетка рейтинга — числовая клетка панели',
+    cells.every(([, cls]) => cls === 'dsh-ms-num'),
+    cells.map(([, cls]) => cls).join(' | '),
+  )
+  // The `-` of the third row carries its own sentence: four different facts can
+  // put a dash in this column and the cell is the only place they are told apart.
+  const third = bodyRows(tree)[2].props.children[headings(tree).findIndex((th) => th.props.key === 'rating')]
+  check(
+    'прочерк объяснён словами в самом столбце',
+    textOf(third).includes('подходящих замеров 24, эффективных 21,5'),
+    textOf(third),
+  )
+  // A bar under this figure would say "the best of the rows on screen", which is
+  // not what a 0-100 score says. Asserted so the decision cannot quietly reverse.
+  check(
+    'под рейтингом полоски нет: 0–100 — его собственная шкала',
+    nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-scale').length > 0 &&
+      barsOf(tree, 'rating').every((width) => width === null),
+    JSON.stringify(barsOf(tree, 'rating')),
+  )
+  // Where the age mark starts, and not only that it appears. The row above is forty
+  // days old; this pins the boundary exactly, because the report draws the same mark
+  // from the same rule and the two surfaces cannot disagree about the row that sits
+  // on it — the comparison is strict `>`, so a measurement exactly one half-life old
+  // is not yet stale. The panel's clock is frozen for these two mounts and the
+  // fixture is placed relative to that frozen instant, which is the only way to sit
+  // exactly on the boundary: `Date.now()` twice is two different numbers.
+  const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000
+  const FROZEN = 1_800_000_000_000
+  const cellAtAge = async (ageMs) => {
+    const view = mountPanel({ prefs: { columnsAll: true }, clock: FROZEN })
+    await view.pump()
+    view.requests[0].answer(
+      payload('ttft', [
+        row('codex', 'gpt-6-astra', {
+          steps: 10,
+          ttftMedian: 2000,
+          rating: rated(61, { anchor: FROZEN - ageMs }),
+        }),
+      ], { providerList: PROVIDER_LIST }),
+    )
+    const tree = await view.pump()
+    const column = headings(tree).findIndex((th) => th.props.key === 'rating')
+    return visibleText(bodyRows(tree)[0].props.children[column])
+  }
+  const onBoundary = await cellAtAge(HALF_LIFE_MS)
+  const oneMsOver = await cellAtAge(HALF_LIFE_MS + 1)
+  check(
+    'ровно на пороге полураспада замер ещё не помечен',
+    onBoundary === '61,0',
+    onBoundary,
+  )
+  check('а на миллисекунду старше — помечен, и оценка та же', oneMsOver === '61,0 *', oneMsOver)
+}
+
+{
+  // The host has answered this question with a rating in every row since stage 4,
+  // but a payload from a build that predates the column has no `rating` at all and
+  // a payload that lost the field has `null`. Both are `-`, neither is a crash,
+  // and the detail block says which route information it has instead of inventing
+  // zeroes for a context window.
+  const legacy = (entry) => {
+    const copy = { ...entry }
+    delete copy.rating
+    delete copy.routeMetadata
+    return copy
+  }
+  const old = payload('ttft', [
+    legacy(row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500 })),
+    row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, rating: null, routeMetadata: null }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: old } }, prefs: { columnsAll: true } })
+  let tree = view.render()
+  const printed = () =>
+    bodyRows(tree).map((row) => {
+      const column = headings(tree).findIndex((th) => th.props.key === 'rating')
+      return visibleText(row.props.children[column])
+    })
+  check(
+    'старый ответ без поля rating рисует прочерки и не падает',
+    hasTable(tree) && printed().length === 2 && printed().every((value) => value === '-'),
+    JSON.stringify(printed()),
+  )
+  check(
+    'и «Подробнее» говорит, что о маршруте ничего не известно',
+    text(tree).includes('сведения о маршруте недоступны: DSH ничего не отдал об этой паре'),
+    text(tree).slice(0, 160),
+  )
+  // A failed refresh keeps the rows that are on screen — including, now, their
+  // rating column — and keeps asking the selection the reader made. The failure
+  // case is asserted in full further down; this is the same rule seen from the
+  // one column that has to survive it.
+  sortButton(tree, 'rating').props.onClick()
+  tree = await view.pump()
+  check(
+    'щелчок по заголовку рейтинга просит порядок по рейтингу начиная с лучших',
+    askedFor(view, 1, { sort: 'rating', dir: 'desc', selection: DEFAULT_SELECTION }),
+    describe(view, 1),
+  )
+  view.requests[1].answer({ ok: false, error: 'boom' }, 500)
+  tree = await view.pump()
+  check(
+    'сорванный запрос оставляет строки с их рейтингом на экране',
+    hasTable(tree) && rowLabels(tree).length === 2 && printed().every((value) => value === '-'),
+    rowLabels(tree).join(' | '),
+  )
+  check(
+    'и панель говорит, что показывает прежний ответ',
+    text(tree).includes('Показаны строки прежнего запроса'),
+    text(tree).slice(0, 160),
+  )
+}
+
+{
+  // The rating heading is a real control, and the second click is the reversal
+  // like every other column's: the host's own direction for this key is `desc`,
+  // and the echo of the answer decides which arrow is drawn.
+  const ranked = payload('rating', [
+    row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, rating: { version: 'technical-v1', score: 72.2, reason: null, provisional: false, qualifiedSamples: 24, sessions: 4 } }),
+    row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, rating: { version: 'technical-v1', score: 48.5, reason: null, provisional: false, qualifiedSamples: 24, sessions: 4 } }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } } })
+  let tree = await view.pump()
+  check('до щелчка столбец рейтинга не сортирует', ariaSort(tree, 'rating') === 'none')
+  sortButton(tree, 'rating').props.onClick()
+  tree = await view.pump()
+  check('рейтинг спрошен по убыванию — сверху лучшие', askedFor(view, 1, { sort: 'rating', dir: 'desc' }), describe(view, 1))
+  view.requests[1].answer(ranked)
+  tree = await view.pump()
+  check('заголовок рейтинга объявляет порядок экрана', ariaSort(tree, 'rating') === 'descending', String(ariaSort(tree, 'rating')))
+  sortButton(tree, 'rating').props.onClick()
+  tree = await view.pump()
+  check('повторный щелчок разворачивает порядок', askedFor(view, 2, { sort: 'rating', dir: 'asc' }), describe(view, 2))
+  view.requests[2].answer({ ...ranked, dir: 'asc' })
+  tree = await view.pump()
+  check('и объявляет обратный', ariaSort(tree, 'rating') === 'ascending', String(ariaSort(tree, 'rating')))
+  check(
+    'порядок рейтинга сохранён в настройках, как любой другой',
+    view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"sort":"rating"') &&
+      view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"asc"'),
+    view.store.get('dsh-model-stats:prefs:v2.selection'),
+  )
+}
+
+{
+  // «Подробнее» is the table's one disclosure. It is a native `details` with a
+  // `summary` as its first child — which is what gives a keyboard Enter and Space
+  // for free — and not a click-handled div, because the explanation of the one
+  // verdict in the row must not be mouse-only. The route's declared reference data
+  // is inside it, and the default output cap is labelled as a default.
+  const route = {
+    source: 'dsh-adapter',
+    checkedAt: Date.now() - 60_000,
+    contextWindow: 1_048_576,
+    defaultMaxTokens: 8192,
+    inputModalities: ['text', 'image'],
+    reasoningEfforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }],
+    defaultReasoningEffort: 'high',
+  }
+  const enriched = payload('ttft', [
+    row('codex', 'gpt-6-astra', {
+      steps: 106,
+      ttftMedian: 3500,
+      rating: {
+        version: 'technical-v1', score: 72.23415362384071, reason: null, provisional: true,
+        anchor: Date.now() - 3_600_000, qualifiedSamples: 24, answeredSamples: 26,
+        excludedRetried: 2, excludedInterrupted: 1, effectiveSamples: 21.5, sessions: 4,
+        coverage: 24 / 26,
+        inputs: { tpsMedian: 41.25, ttftMedianMs: 3180, ttftP90Ms: 9420 },
+        components: { throughput: 0.292, latency: 0.611, tailLatency: 0.614 },
+      },
+      routeMetadata: route,
+    }),
+    // The adapter answered and declares nothing: the panel says so per field
+    // rather than borrowing the sibling row's context window.
+    row('openrouter', 'glm-5.3-flash', {
+      steps: 5,
+      ttftMedian: 985,
+      rating: { version: 'technical-v1', score: 40, reason: null, provisional: false, anchor: null, qualifiedSamples: 12, answeredSamples: 12, excludedRetried: 0, excludedInterrupted: 0, effectiveSamples: 12, sessions: 2, coverage: 1, inputs: {}, components: {} },
+      routeMetadata: { source: 'dsh-adapter', checkedAt: Date.now(), contextWindow: null, defaultMaxTokens: null, inputModalities: null, reasoningEfforts: null, defaultReasoningEffort: null },
+    }),
+  ], { providerList: PROVIDER_LIST })
+
+  const view = mountPanel({ prefs: { columnsAll: true } })
+  await view.pump()
+  view.requests[0].answer(enriched)
+  const tree = await view.pump()
+  const blocks = nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-details')
+  check('в развёрнутом наборе у каждой строки один блок «Подробнее»', blocks.length === 2, `${blocks.length}`)
+  check(
+    'это настоящий details с summary первым ребёнком',
+    blocks.every((block) => block.type === 'details' && block.props.children?.[0]?.type === 'summary'),
+    blocks.map((block) => `${block.type}/${block.props.children?.[0]?.type}`).join(' | '),
+  )
+  check(
+    'и summary не мышью единой: на нём нет обработчика, его открывает браузер',
+    blocks.every((block) => block.props.children[0].props.onClick === undefined),
+  )
+  check(
+    'сводка «Подробнее» видна в обоих языках словаря',
+    view.mod.__test__.MESSAGES.ru['details.summary'] === 'Подробнее' &&
+      view.mod.__test__.MESSAGES.en['details.summary'] === 'Details',
+  )
+  // The panel separates a figure from its unit with a non-breaking space on
+  // purpose ("820 ms" must not wrap). These assertions are about which words and
+  // numbers the block carries, not about that rule, so the separator is folded
+  // into an ordinary space before comparing.
+  const plain = (node) => textOf(node).replace(/\u00A0/g, ' ')
+  const first = plain(blocks[0])
+  check('в блоке — версия формулы и оценка', first.includes('рейтинг technical-v1: 72,2 из 100'), first.slice(0, 120))
+  check('пометка «предварительная оценка» рядом со счётом', first.includes('предварительная оценка: выборка мала'))
+  check(
+    'счёт замеров, исключения и сессии',
+    first.includes('подходящих замеров 24 из 26 ответов') &&
+      first.includes('исключено: 2 с повторами, 1 прерванных (могут пересекаться)') &&
+      first.includes('эффективных 21,5') &&
+      first.includes('сессий 4'),
+    first.slice(0, 220),
+  )
+  check('измерения, из которых сложился счёт', first.includes('взвешенные квантили, а не медианы столбцов: скорость 41,3 tok/s, отклик 3,2 s, отклик p90 9,4 s'), first.slice(0, 260))
+  check('и множители формулы', first.includes('множители: скорость 0,29, отклик 0,61, хвост 0,61'))
+  check(
+    'объявленные маршрутом данные — с оговоркой про лимит по умолчанию',
+    first.includes('контекст: 1 048 576') && first.includes('лимит ответа по умолчанию: 8 192') &&
+      first.includes('вход: text, image') && first.includes('reasoning: High, Low — по умолчанию High'),
+    first.slice(0, 340),
+  )
+  check('и пометка источника', first.includes('источник: адаптер DSH, спрошен'), first.slice(0, 380))
+  check('цена и квоты названы неизвестными, а не нулём', first.includes('цена и квоты: неизвестны — DSH не отдаёт единых тарифных и квотных данных'))
+  check('и оговорка о том, чего измерение не доказывает', first.includes('Отсутствие повторов не доказывает отсутствие сетевой задержки.'))
+  const second = plain(blocks[1])
+  check(
+    'маршрут, объявивший пустоту, говорит «не объявлено» по каждому полю',
+    second.includes('контекст: не объявлено') && second.includes('лимит ответа по умолчанию: не объявлено'),
+    second.slice(0, 220),
+  )
+  // A compact table is one line per row, so the disclosure belongs to the column
+  // set that has room for it — and the legend is what says where it went.
+  const compact = mountPanel({ entries: { [cacheKey('rating', 'desc', 'model')]: { at: Date.now(), data: enriched } }, prefs: { columnsAll: false, sort: 'rating', dir: 'desc' } })
+  const compactTree = compact.render()
+  check(
+    'в кратком наборе блока нет, а легенда говорит, где он',
+    nodesWhere(compactTree, (node) => node.props?.className === 'dsh-ms-details').length === 0 &&
+      text(compactTree).includes('под названием модели появляется «Подробнее»'),
+    text(compactTree).slice(-200),
+  )
+}
+
+{
+  // The panel is written once and rendered in whichever locale the host's service
+  // answers, so the new copy is rendered in English too — through a real locale
+  // service, not by reading the dictionary: a key the panel asks for through the
+  // service and a key it asks for from its own fallback are two different code
+  // paths, and only one of them was exercised until now.
+  const route = {
+    source: 'dsh-adapter', checkedAt: Date.now(), contextWindow: 262_144,
+    defaultMaxTokens: 4096, inputModalities: ['text'],
+    reasoningEfforts: [{ id: 'medium', name: 'Medium' }], defaultReasoningEffort: 'medium',
+  }
+  const en = payload('rating', [
+    row('codex', 'gpt-6-astra', {
+      steps: 106, ttftMedian: 3500,
+      rating: { version: 'technical-v1', score: 72.23415362384071, reason: null, provisional: false, anchor: Date.now(), qualifiedSamples: 24, answeredSamples: 26, excludedRetried: 2, excludedInterrupted: 1, effectiveSamples: 21.5, sessions: 4, coverage: 24 / 26, inputs: { tpsMedian: 41.25, ttftMedianMs: 3180, ttftP90Ms: 9420 }, components: { throughput: 0.292, latency: 0.611, tailLatency: 0.614 } },
+      routeMetadata: route,
+    }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ entries: { [cacheKey('rating', 'desc', 'model')]: { at: Date.now(), data: en } }, prefs: { columnsAll: true, sort: 'rating', dir: 'desc' }, locale: 'en' })
+  const tree = view.render()
+  check('английский рейтинг — с точкой, как в en', columnCells(tree, 'rating')[0]?.[0].startsWith('72.2'), JSON.stringify(columnCells(tree, 'rating')))
+  check(
+    'и подпись столбца английская',
+    textOf(sortButton(tree, 'rating')).replace(/[▲▼]/g, '').trim() === 'rating',
+    headingText(headingFor(tree, 'rating')).slice(0, 80),
+  )
+  const body = text(tree)
+  check('и «Подробнее» — «Details»', body.includes('Details'), body.slice(0, 80))
+  check('с английскими словами о маршруте и цене', body.includes('default output cap: 4,096') && body.includes('price and quotas: unknown'))
+}
+
+// --- полоска под числом ------------------------------------------------------
+//
+// The bar is the panel's own way of saying "this column is a scale": the largest
+// value on screen is the full width and every other row is its share. What is
+// asserted here is the rule and not one column's rendering: the metric named by
+// the column decides the width, a figure the host did not measure draws nothing,
+// and one row alone has nothing to be a share of.
+//
+// The case runs in the expanded column set because that is where the error rate
+// lives now: `ош./100` moved out of the compact set to pay for the rating column,
+// and a bar is still something this panel drew — the assertion follows the
+// column rather than the column staying where the assertion was.
+console.log('')
+console.log('--- полоска под числом: доля от наибольшего в столбце ---')
+{
+  const measured = payload('ttft', [
+    row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, e2eTpsMedian: 40, errorRate: 8 }),
+    row('local-uns', 'Ornith-9B', { steps: 28, ttftMedian: 46, e2eTpsMedian: 5, errorRate: 2 }),
+    // The slowest response, the fastest end-to-end rate and the worst error rate in
+    // one row, so three different columns cannot be read off one another: a bar that
+    // used the wrong metric would show up in the widths below.
+    row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, e2eTpsMedian: 80, errorRate: 16 }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ prefs: { columnsAll: true } })
+  await view.pump()
+  view.requests[0].answer(measured)
+  const tree = await view.pump()
+
+  /** The rendered cell of one column of one row. */
+  const cellAt = (key, index) => {
+    const head = nodesWhere(tree, (node) => node.type === 'thead')[0]
+    const cells = (head?.props.children ?? []).flatMap((line) => line?.props?.children ?? [])
+    const column = cells.findIndex((cell) => cell?.props?.key === key)
+    if (column === -1) throw new Error(`нет столбца ${key}`)
+    return bodyRows(tree)[index].props.children[column]
+  }
+  /** The width of the bar in one cell, or null when the cell draws none. */
+  const barWidth = (key, index) => {
+    const scale = nodesWhere(cellAt(key, index), (node) => node.props?.className === 'dsh-ms-scale')[0]
+    if (scale === undefined) return null
+    const fill = nodesWhere(scale, (node) => node.props?.className === 'dsh-ms-scale-fill')[0]
+    return fill?.props?.style?.width ?? null
+  }
+  const bars = (key) => [0, 1, 2].map((index) => barWidth(key, index))
+
+  check('под откликом полоска осталась', bars('ttft').every((width) => width !== null), JSON.stringify(bars('ttft')))
+  check(
+    'отклик: самая медленная строка — самая длинная полоска',
+    bars('ttft')[0] === '100%' && bars('ttft')[2] === '28%',
+    JSON.stringify(bars('ttft')),
+  )
+  check(
+    'под tok/s e2e med полоска появилась',
+    bars('e2e').every((width) => width !== null),
+    JSON.stringify(bars('e2e')),
+  )
+  check(
+    'e2e: самая быстрая строка — самая длинная полоска',
+    bars('e2e')[2] === '100%' && bars('e2e')[1] === '6%',
+    JSON.stringify(bars('e2e')),
+  )
+  check(
+    'под ошибками на 100 шагов полоска появилась',
+    bars('errorRate').every((width) => width !== null),
+    JSON.stringify(bars('errorRate')),
+  )
+  check(
+    'ош./100: худшая строка — самая длинная полоска',
+    bars('errorRate')[2] === '100%' && bars('errorRate')[1] === '13%',
+    JSON.stringify(bars('errorRate')),
+  )
+  check(
+    'шагов полоски не получил: это объём выборки, а не метрика',
+    bars('steps').every((width) => width === null),
+    JSON.stringify(bars('steps')),
+  )
+  check(
+    'столбец слов «статус» полоски не получил',
+    nodesWhere(cellAt('liveness', 0), (node) => node.props?.className === 'dsh-ms-scale').length === 0,
+  )
+}
+
+{
+  // A figure the host never measured is not a small one: `-` must draw nothing.
+  const unmeasured = payload('ttft', [
+    row('codex', 'gpt-6-astra', { ttftMedian: 3500 }),
+    row('openrouter', 'glm-5.3-flash', { ttftMedian: 985 }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ prefs: { columnsAll: false } })
+  await view.pump()
+  view.requests[0].answer(unmeasured)
+  const tree = await view.pump()
+  const head = nodesWhere(tree, (node) => node.type === 'thead')[0]
+  const cells = (head?.props.children ?? []).flatMap((line) => line?.props?.children ?? [])
+  const column = cells.findIndex((cell) => cell?.props?.key === 'e2e')
+  const scale = nodesWhere(bodyRows(tree)[0].props.children[column], (node) => node.props?.className === 'dsh-ms-scale')
+  check('неизмеренная величина полоски не рисует — «-» это не маленькое число', scale.length === 0, `${scale.length}`)
+}
+
+{
+  // One row is nothing to be a share of, in every column at once.
+  const single = payload('ttft', [
+    row('codex', 'gpt-6-astra', { ttftMedian: 3500, e2eTpsMedian: 40, errorRate: 8 }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ prefs: { columnsAll: false } })
+  await view.pump()
+  view.requests[0].answer(single)
+  const tree = await view.pump()
+  check(
+    'одна строка — ни одной полоски ни в одном столбце',
+    nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-scale').length === 0,
+    `${nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-scale').length}`,
+  )
+}
+
+{
+  // The full column set draws its bars from the same table of maxima, so the two
+  // columns that named a metric this pass does not measure — `ретраи` and
+  // `префилл`, whose cells have asked for a bar since they were written — must
+  // still draw none. That is the current decision and not an oversight: a bar under
+  // every figure makes the three scaled columns read like six, and the fix, if it
+  // is wanted, is one line in `SCALED`. Asserted so the next reader can tell the
+  // difference between "not asked for" and "silently stopped working".
+  const scaled = payload('ttft', [
+    row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, e2eTpsMedian: 40, errorRate: 8, retryRate: 0.1 }),
+    row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, e2eTpsMedian: 80, errorRate: 0.1, retryRate: 0.4 }),
+  ], { providerList: PROVIDER_LIST })
+  const view = mountPanel({ prefs: { columnsAll: true } })
+  await view.pump()
+  view.requests[0].answer(scaled)
+  const tree = await view.pump()
+  const head = nodesWhere(tree, (node) => node.type === 'thead')[0]
+  const cells = (head?.props.children ?? []).flatMap((line) => line?.props?.children ?? [])
+  const barIn = (key, index) => {
+    const column = cells.findIndex((cell) => cell?.props?.key === key)
+    if (column === -1) throw new Error(`нет столбца ${key}`)
+    return nodesWhere(bodyRows(tree)[index].props.children[column], (node) => node.props?.className === 'dsh-ms-scale').length
+  }
+  check(
+    'столбец, чья метрика не объявлена в SCALED, полоски не рисует',
+    barIn('retry', 0) === 0 && barIn('prefill', 0) === 0,
+    `ретраи: ${barIn('retry', 0)}, префилл: ${barIn('prefill', 0)}`,
+  )
+  check(
+    'а объявленные рисуют и в полном наборе',
+    barIn('ttft', 0) === 1 && barIn('e2e', 0) === 1 && barIn('errorRate', 0) === 1,
+    `ttft: ${barIn('ttft', 0)}, e2e: ${barIn('e2e', 0)}, ош./100: ${barIn('errorRate', 0)}`,
+  )
 }
 
 console.log('--- переключение сортировки ---')
@@ -577,7 +1359,7 @@ console.log('--- переключение сортировки ---')
   const view = mountPanel()
   let tree = await view.pump()
   check('до первого ответа таблицы нет, показан ход загрузки', !hasTable(tree) && text(tree).includes('Считаю статистику'))
-  check('панель спросила сортировку по умолчанию', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&limit=200', view.requests[0]?.url)
+  check('панель спросила сортировку по умолчанию', askedFor(view, 0, { sort: 'ttft', dir: 'asc' }), describe(view, 0))
 
   view.requests[0].answer(byTtft)
   tree = await view.pump()
@@ -592,7 +1374,7 @@ console.log('--- переключение сортировки ---')
 
   sortButton(tree, 'tps').props.onClick()
   tree = await view.pump()
-  check('переключение сортировки запрошено у хоста', view.requests[1]?.url === '/api/model-stats?sort=speed&dir=desc&view=model&limit=200', view.requests[1]?.url)
+  check('переключение сортировки запрошено у хоста', askedFor(view, 1, { sort: 'speed', dir: 'desc' }), describe(view, 1))
   check('ответа ещё нет', view.requests[1]?.settled === false)
   check('ТАБЛИЦА ОСТАЛАСЬ НА ЭКРАНЕ, пока ответ в пути', hasTable(tree), text(tree).slice(0, 80))
   check('на экране те же строки, а не пустота', rowLabels(tree).join('|').startsWith('Ornith-9B'), rowLabels(tree).join(' | '))
@@ -607,7 +1389,7 @@ console.log('--- переключение сортировки ---')
 
 // --- 2: a switch whose request fails ----------------------------------------
 {
-  const cached = { 'ttft.asc|model|': { at: Date.now(), data: byTtft } }
+  const cached = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
   const view = mountPanel({ entries: cached })
   let tree = await view.pump()
   check('кэш отдан сразу, без ожидания', hasTable(tree) && rowLabels(tree)[0]?.startsWith('Ornith-9B'))
@@ -653,206 +1435,403 @@ console.log('--- переключение сортировки ---')
   // draws the arrow from the order the host says it applied, and a payload that
   // claims another one is a host that did not answer this question.
   const entries = {
-    'errors.desc|model|': { at: Date.now(), data: { ...bySpeed, sort: 'errors' } },
+    [cacheKey('errors', 'desc', 'model')]: { at: Date.now(), data: { ...bySpeed, sort: 'errors' } },
   }
   const view = mountPanel({ entries, prefs: { sort: 'errors', view: 'model' } })
   const tree = await view.pump()
-  check('сохранённая сортировка восстановлена', view.requests[0]?.url === '/api/model-stats?sort=errors&dir=desc&view=model&limit=200', view.requests[0]?.url)
+  check('сохранённая сортировка восстановлена', askedFor(view, 0, { sort: 'errors', dir: 'desc' }), describe(view, 0))
   check('кэшированный ответ отдан без ожидания', hasTable(tree))
   check('сохранённое направление показано стрелкой заголовка', ariaSort(tree, 'errors') === 'descending', headings(tree).map((th) => `${th.props.key}=${th.props['aria-sort']}`).join(' ') || '(заголовков нет)')
 }
 {
   const view = mountPanel({ prefs: { sort: 'nonsense', view: 'provider' } })
   view.render()
-  check('испорченная сортировка не уходит на хост', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=provider&limit=200', view.requests[0]?.url)
+  check('испорченная сортировка не уходит на хост', askedFor(view, 0, { sort: 'ttft', dir: 'asc', view: 'provider' }), describe(view, 0))
 }
 
-console.log('\n--- фильтрация по провайдеру ---')
+console.log('\n--- выбор моделей: дерево ---')
 
-// The filter is the same kind of question as the sort — a different answer from
-// the host, and a different set of rows — so the contract of section 1 applies to
-// it unchanged: a switch must never take the table off the screen, and the notice
-// about a stale answer has to name the filter as well as the sort, or a table of
-// every provider is read as a table of the selected ones.
+// The selection is the same kind of question as the sort — a different answer from
+// the host, and a different set of rows — so the contract of section 1 applies to it
+// unchanged: a switch must never take the table off the screen, and the notice about
+// a stale answer has to name the selection as well as the sort, or a table of every
+// measured model is read as a table of the ones the reader asked for.
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  check(
+    'первый запрос несёт правило по умолчанию, а не список пар',
+    askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: DEFAULT_SELECTION }),
+    describe(view, 0),
+  )
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  check('счётчик называет выбранное и весь каталог', textOf(modelsCount(tree)) === '3 из 5', textOf(modelsCount(tree)))
+  check(
+    'дерево предлагает всех, кого знает каталог, а не только строки таблицы',
+    treeParents(tree).map(treeName).join() === 'codex,local-uns,openrouter,ollama',
+    treeParents(tree).map(treeName).join(' | '),
+  )
+  check(
+    'отмечены ровно замеренные пары, а настроенные без истории — нет',
+    checkedModels(tree).join() === 'codex/gpt-6-astra,local-uns/Ornith-9B,openrouter/glm-5.3-flash',
+    checkedModels(tree).join(' | '),
+  )
+  check(
+    'каждая модель подписана полным идентификатором',
+    treeRows(tree).every((node) => typeof node.props.children[0].props.value === 'string' && node.props.children[0].props.value.includes('\u0000')),
+    treeRows(tree).length + ' строк',
+  )
+  check('провайдер показывает, сколько его моделей выбрано', textOf(treeParent(tree, 'codex')).includes('1 из 2 моделей'), textOf(treeParent(tree, 'codex')))
+}
+
+// --- the tri-state parent ------------------------------------------------------
+// A group whose models are partly selected has to say so, and say it in a way that
+// survives being read without colour: a real indeterminate control, an
+// `aria-checked="mixed"` for a screen reader, a `data-state` a test can read, and
+// the number of selected models beside the name.
 {
   const view = mountPanel()
   let tree = await view.pump()
   view.requests[0].answer(byTtft)
   tree = await view.pump()
-  check('без выбора в сводке написано «все»', textOf(filterSummary(tree)) === 'Провайдеры: все', textOf(filterSummary(tree)))
-  check('число шагов провайдера показано рядом с именем', textOf(filterOption(tree, 'openrouter')).includes('шагов: 5'), textOf(filterOption(tree, 'openrouter')))
+  const codex = treeParent(tree, 'codex')
+  check('частичный провайдер помечен indeterminate', treeCheck(codex).props['aria-checked'] === 'mixed' && treeCheck(codex).props['data-state'] === 'partial', JSON.stringify({ aria: treeCheck(codex).props['aria-checked'], state: treeCheck(codex).props['data-state'] }))
+  check('и числом выбранных моделей', textOf(codex).includes('1 из 2 моделей'), textOf(codex))
+  const complete = treeParent(tree, 'local-uns')
+  check('полный провайдер помечен выбранным', treeCheck(complete).props.checked === true && treeCheck(complete).props['data-state'] === 'all')
+  const empty = treeParent(tree, 'ollama')
+  check('пустой провайдер снят', treeCheck(empty).props.checked === false && treeCheck(empty).props['data-state'] === 'none')
 
-  filterCheck(tree, 'codex').props.onChange({})
-  tree = await view.pump()
-  check('первый выбранный провайдер ушёл на хост', view.requests[1]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&provider=codex&limit=200', view.requests[1]?.url)
-  view.requests[1].answer(filtered('ttft', byTtft.rows, ['codex']))
-  tree = await view.pump()
-
-  filterCheck(tree, 'openrouter').props.onChange({})
+  // The partial group goes to "all": a click has to be able to finish what the
+  // reader started, and "all except one" is not a state a parent checkbox has.
+  treeCheck(codex).props.onChange({})
   tree = await view.pump()
   check(
-    'выбор ушёл на хост одним запросом со сортировкой, в порядке имён',
-    view.requests[2]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&provider=codex%2Copenrouter&limit=200',
-    view.requests[2]?.url,
+    'клик по частичному провайдеру выбирает его целиком правилом, а не перечислением',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { codex: 'all' } }) }),
+    describe(view, 1),
   )
-  check('ответа ещё нет', view.requests[2]?.settled === false)
-  check('ТАБЛИЦА ОСТАЛАСЬ НА ЭКРАНЕ, пока ответ на фильтр в пути', hasTable(tree))
-  check('на экране прежняя строка, а не пустота', rowLabels(tree).length === 1, rowLabels(tree).join(' | '))
-  check('панель говорит, что это прежний ответ', text(tree).includes(NOTICE))
-  check(
-    'в уведомлении назван и фильтр, а не только сортировка',
-    text(tree).includes('выбрано провайдеров: 2 из 3'),
-    text(tree).slice(text(tree).indexOf(NOTICE), text(tree).indexOf(NOTICE) + 90),
-  )
-
-  view.requests[2].answer(filtered('ttft', byTtft.rows, ['codex', 'openrouter']))
+  check('ответа ещё нет, а таблица на месте', view.requests[1].settled === false && hasTable(tree))
+  view.requests[1].answer(byTtft)
   tree = await view.pump()
-  check('после ответа в таблице только выбранные провайдеры', rowLabels(tree).length === 2, rowLabels(tree).join(' | '))
-  check('предупреждение о прежнем ответе снято', !text(tree).includes(NOTICE))
-  check('сводка фильтра считает выбранное', textOf(filterSummary(tree)) === 'Провайдеры: 2 из 3', textOf(filterSummary(tree)))
-  check('отмечены ровно выбранные провайдеры', filterChecked(tree).join() === 'codex,openrouter', filterChecked(tree).join(' | '))
-  check(
-    'выбор записан в настройки панели',
-    JSON.parse(view.store.get('dsh-model-stats:prefs:v1')).providers.join() === 'codex,openrouter',
-    view.store.get('dsh-model-stats:prefs:v1'),
-  )
-  check(
-    'подвал говорит, что осталось от истории после фильтра',
-    text(tree).includes('в таблице: 2 моделей, 111 шагов'),
-    text(tree).match(/в таблиц[ея][^·]*/)?.[0],
-  )
+  check('и его модель без истории тоже выбрана', checkedModels(tree).includes('codex/gpt-6-mini'), checkedModels(tree).join(' | '))
 
-  filterCheck(tree, 'codex').props.onChange({})
-  tree = await view.pump()
-  check('снятие одного провайдера оставляет остальные', view.requests[3]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&provider=openrouter&limit=200', view.requests[3]?.url)
-
-  buttonWithText(tree, 'Сбросить').props.onClick()
-  tree = await view.pump()
-  check('сброс убирает фильтр из запроса', view.requests[4]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&limit=200', view.requests[4]?.url)
-  check('сброс записан в настройки', JSON.parse(view.store.get('dsh-model-stats:prefs:v1')).providers.join() === '')
-  check('кнопки сброса больше нет', buttonWithText(tree, 'Сбросить') === undefined)
-}
-
-// --- the list the filter offers ----------------------------------------------
-// The rows on screen cannot answer this: they are sorted, cut to the limit and
-// already filtered, so they name a few of the providers in the history — and the
-// ones a filter exists to compare are exactly the ones missing.
-{
-  const view = mountPanel({ prefs: { providers: ['openrouter'] } })
-  let tree = await view.pump()
-  view.requests[0].answer(filtered('ttft', byTtft.rows, ['openrouter']))
-  tree = await view.pump()
-  check('строки отфильтрованного ответа показаны', rowLabels(tree).length === 1, rowLabels(tree).join(' | '))
-  check(
-    'фильтр предлагает всех провайдеров истории, а не только строки таблицы',
-    filterOptions(tree).map(optionName).join() === 'codex,local-uns,openrouter',
-    filterOptions(tree).map(optionName).join(' | '),
-  )
-  check('сводка считает выбранное из общего списка', textOf(filterSummary(tree)) === 'Провайдеры: 1 из 3', textOf(filterSummary(tree)))
-}
-
-// --- the order the filter offers them in --------------------------------------
-// The host sends its list busiest first, which is the order the table itself is
-// read in and the wrong one to find a name in: the control is a list of
-// checkboxes, and a name that moves between two answers is a name the reader has
-// to hunt for again. The fixture makes the two orders disagree — openrouter
-// (106 steps), codex (28), local-uns (5) — because a fixture the two orders
-// agree on can only pass by accident, whichever order the panel follows.
-{
-  const byTraffic = [
-    { provider: 'openrouter', models: 1, steps: 106, errors: 0, lastSeen: 3000 },
-    { provider: 'codex', models: 1, steps: 28, errors: 0, lastSeen: 1000 },
-    { provider: 'local-uns', models: 1, steps: 5, errors: 0, lastSeen: 2000 },
-  ]
-  const byName = [...byTraffic]
-    .sort((a, b) => a.provider.localeCompare(b.provider))
-    .map((entry) => entry.provider)
-  check(
-    'фикстура различает порядок по имени и порядок по трафику',
-    byTraffic.map((entry) => entry.provider).join() !== byName.join(),
-    `${byTraffic.map((entry) => entry.provider).join(' | ')} / ${byName.join(' | ')}`,
-  )
-  const view = mountPanel({ prefs: { providers: ['openrouter'] } })
-  let tree = await view.pump()
-  view.requests[0].answer(filtered('ttft', byTtft.rows, ['openrouter'], { providerList: byTraffic }))
+  treeCheck(treeParent(tree, 'codex')).props.onChange({})
   tree = await view.pump()
   check(
-    'фильтр предлагает провайдеров по алфавиту, а не по числу шагов',
-    filterOptions(tree).map(optionName).join() === byName.join(),
-    filterOptions(tree).map(optionName).join(' | '),
+    'второй клик по полному провайдеру снимает его целиком',
+    askedFor(view, 2, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { codex: 'none' } }) }),
+    describe(view, 2),
   )
-  check('число шагов осталось на строке, рядом с именем', textOf(filterOption(tree, 'openrouter')).includes('шагов: 106'), textOf(filterOption(tree, 'openrouter')))
+
+  // And from nothing it comes back as the measured part of the provider — the
+  // third state, and the one a parent checkbox cannot show with `checked` alone.
+  const cleared = treeParent(tree, 'codex')
+  check('снятый провайдер читается как пустой, а не как частичный', treeCheck(cleared).props['data-state'] === 'none' && treeHint(cleared) === undefined, JSON.stringify({ state: treeCheck(cleared).props['data-state'], hint: treeHint(cleared) }))
+  treeCheck(cleared).props.onChange({})
+  tree = await view.pump()
+  check(
+    'третий клик по пустому провайдеру выбирает только измеренные, правилом, а не перечислением',
+    askedFor(view, 3, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { codex: 'measured' } }) }),
+    describe(view, 3),
+  )
+  view.requests[3].answer(byTtft)
+  tree = await view.pump()
+  const measured = treeParent(tree, 'codex')
+  check('измеренная модель выбрана, а модель без истории — нет', checkedModelsOf(tree, 'codex').join(' | ') === 'codex/gpt-6-astra', checkedModelsOf(tree, 'codex').join(' | '))
+  check('такое правило названо, а не спрятано в количестве', treeCheck(measured).props['data-state'] === 'measured' && typeof treeHint(measured) === 'string', JSON.stringify({ state: treeCheck(measured).props['data-state'], hint: treeHint(measured) }))
+  check('и рамка при этом остаётся настоящей indeterminate-рамкой', treeCheck(measured).props['aria-checked'] === 'mixed' && treeCheck(measured).props.checked === false, JSON.stringify({ aria: treeCheck(measured).props['aria-checked'], checked: treeCheck(measured).props.checked }))
+
+  // The cycle is a loop: from the measured rule the first branch takes over again,
+  // because that rule is not "all" and a group held by it is not full.
+  treeCheck(measured).props.onChange({})
+  tree = await view.pump()
+  check(
+    'четвёртый клик возвращает провайдера к «все» — цикл замкнут',
+    askedFor(view, 4, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { codex: 'all' } }) }),
+    describe(view, 4),
+  )
 }
 
-// --- the filter and the two views --------------------------------------------
-// In the provider view a row already is a provider, so a filter could only ever
-// leave one row: it is not sent. The selection is kept, so the way back to the
-// model view is the table the user left, not a new question.
+// --- a provider with no unmeasured model ---------------------------------------
+// `measured` and `all` say the same thing about a group whose every model has been
+// run, so the third state cannot be told from the first there. That is not a state
+// the panel may fake: the cycle has to collapse to the two ends rather than invent
+// a difference the reader cannot see.
 {
-  const view = mountPanel({ prefs: { sort: 'ttft', view: 'model', providers: ['openrouter'] } })
-  let tree = await view.pump()
-  view.requests[0].answer(filtered('ttft', byTtft.rows, ['openrouter']))
-  tree = await view.pump()
-  check('сохранённый фильтр отправлен при открытии', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&provider=openrouter&limit=200', view.requests[0]?.url)
-
-  // The chip names the view it is showing, so the switch is the other name.
-  buttonWithText(tree, 'по моделям').props.onClick()
-  tree = await view.pump()
-  check('в режиме по провайдерам фильтр не отправляется', view.requests[1]?.url === '/api/model-stats?sort=ttft&dir=asc&view=provider&limit=200', view.requests[1]?.url)
-  check('в режиме по провайдерам фильтр не показан', filterSummary(tree) === undefined)
-
-  view.requests[1].answer({ ...byTtft, view: 'provider' })
-  tree = await view.pump()
-  buttonWithText(tree, 'по провайдерам').props.onClick()
-  tree = await view.pump()
-  check('возврат к моделям вернул и фильтр', view.requests[2]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&provider=openrouter&limit=200', view.requests[2]?.url)
-  check('выбор не потерялся при смене вида', textOf(filterSummary(tree)) === 'Провайдеры: 1 из 3', textOf(filterSummary(tree)))
-}
-
-// --- the filter's own edge cases ---------------------------------------------
-{
-  // An answer from a host that predates the filter carries no provider list.
-  // The rows still name the providers that are in it, so the control works.
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: byTtft } } })
-  const { providerList, ...withoutList } = byTtft
-  view.render()
-  view.requests[0].answer(withoutList)
-  const tree = await view.pump()
-  check('без списка провайдеров фильтр собран из строк', filterOptions(tree).map(optionName).join() === 'codex,local-uns,openrouter', filterOptions(tree).map(optionName).join(' | '))
-}
-{
-  // A corrupt selection is not a query: only the real names go to the host.
-  const view = mountPanel({ prefs: { providers: [1, null, 'codex', 'codex', '  ', 'openrouter'] } })
-  view.render()
-  check('испорченный фильтр очищен и не уходит на хост', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&provider=codex%2Copenrouter&limit=200', view.requests[0]?.url)
-}
-{
-  // A filter can leave nothing, and that is not an empty history: the sessions
-  // are there, just not behind the selected providers.
-  const view = mountPanel({ prefs: { providers: ['openrouter'] } })
-  let tree = await view.pump()
-  view.requests[0].answer(payload('ttft', [], { providers: ['openrouter'], providerList: PROVIDER_LIST }))
-  tree = await view.pump()
-  check('пустой результат фильтра объяснён отдельно', text(tree).includes('У выбранных провайдеров'), text(tree).slice(0, 60))
-  check('пустой результат фильтра не зовёт поработать в сессии', !text(tree).includes('Поработайте в сессии'))
-  check('фильтр на месте, его можно снять', buttonWithText(tree, 'Сбросить') !== undefined)
-}
-{
-  // The cache is keyed by the whole question, so a filtered answer is not shown
-  // for the unfiltered question and the other way round.
-  const filteredEntry = { at: Date.now(), data: filtered('ttft', byTtft.rows, ['openrouter']) }
-  const view = mountPanel({ entries: { 'ttft.asc|model|openrouter': filteredEntry }, prefs: { providers: ['openrouter'] } })
-  const tree = view.render()
-  check('отфильтрованный кэш отдан сразу, без ожидания', hasTable(tree) && rowLabels(tree).length === 1, rowLabels(tree).join(' | '))
-}
-{
-  // A selection the current answer does not know is still offered: the control
-  // must never hide a filter the user is looking at.
-  const view = mountPanel({ prefs: { providers: ['openrouter', 'retired-provider'] } })
+  const view = mountPanel({ prefs: { selection: rules({ providers: { 'local-uns': 'measured' } }) } })
   let tree = await view.pump()
   view.requests[0].answer(byTtft)
   tree = await view.pump()
-  check('выбранный провайдер остаётся в списке, даже если его нет в ответе', filterOptions(tree).map(optionName).includes('retired-provider'), filterOptions(tree).map(optionName).join(' | '))
+  const local = treeParent(tree, 'local-uns')
+  check('измеренное правило на полностью измеренном провайдере — это «все»', treeCheck(local).props.checked === true && treeCheck(local).props['aria-checked'] === 'true', JSON.stringify({ checked: treeCheck(local).props.checked, aria: treeCheck(local).props['aria-checked'] }))
+  check('но оно остаётся названным правилом, а не вычисленным частичным', treeCheck(local).props['data-state'] === 'measured' && typeof treeHint(local) === 'string', treeCheck(local).props['data-state'])
+  treeCheck(local).props.onChange({})
+  tree = await view.pump()
+  check(
+    'и клик по нему снимает всё, а не возвращает «все»',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { 'local-uns': 'none' } }) }),
+    describe(view, 1),
+  )
+}
+
+// --- one model under a provider-wide rule --------------------------------------
+// The exception is what makes a rule usable: "all of codex except the mini" has to
+// be expressible, and expressible as one exception rather than as a list of every
+// model of codex.
+{
+  const view = mountPanel({ prefs: { selection: rules({ providers: { codex: 'all' } }) } })
+  let tree = await view.pump()
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  check('правило провайдера восстановлено из настроек', treeCheck(treeParent(tree, 'codex')).props.checked === true)
+  modelCheck(tree, 'codex', 'gpt-6-mini').props.onChange({})
+  tree = await view.pump()
+  check(
+    'снятие одной модели записано исключением, а не отменой правила провайдера',
+    askedFor(view, 1, {
+      sort: 'ttft',
+      dir: 'asc',
+      selection: rules({ providers: { codex: 'all' }, pairs: { 'codex\u0000gpt-6-mini': 'off' } }),
+    }),
+    describe(view, 1),
+  )
+  view.requests[1].answer(byTtft)
+  tree = await view.pump()
+  check('провайдер снова частичный', treeCheck(treeParent(tree, 'codex')).props['data-state'] === 'partial')
+  modelCheck(tree, 'codex', 'gpt-6-mini').props.onChange({})
+  tree = await view.pump()
+  check(
+    'возврат отметки убирает исключение, а не пишет обратное',
+    askedFor(view, 2, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { codex: 'all' } }) }),
+    describe(view, 2),
+  )
+}
+
+// --- select all and none ------------------------------------------------------
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  buttonWithText(tree, 'Выбрать все').props.onClick()
+  tree = await view.pump()
+  check(
+    '«выбрать все» — это правило, а не список из пяти пар',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', selection: rules({ base: 'all' }) }),
+    describe(view, 1),
+  )
+  view.requests[1].answer(byTtft)
+  tree = await view.pump()
+  check('и счётчик считает весь каталог', textOf(modelsCount(tree)) === '5 из 5', textOf(modelsCount(tree)))
+  buttonWithText(tree, 'Снять все').props.onClick()
+  tree = await view.pump()
+  check(
+    '«снять все» — пустое правило, а не пустая история',
+    askedFor(view, 2, { sort: 'ttft', dir: 'asc', selection: rules({ base: 'none' }) }),
+    describe(view, 2),
+  )
+  view.requests[2].answer(payload('ttft', [], { selection: rules({ base: 'none' }) }))
+  tree = await view.pump()
+  check('пустой выбор объяснён отдельно', text(tree).includes('Модели не выбраны'), text(tree).slice(0, 80))
+  check('пустой выбор не зовёт поработать в сессии', !text(tree).includes('Поработайте в сессии'))
+  buttonWithText(tree, 'Вернуть выбор по умолчанию').props.onClick()
+  tree = await view.pump()
+  check(
+    'кнопка возврата ставит правило первого открытия',
+    askedFor(view, 3, { sort: 'ttft', dir: 'asc', selection: DEFAULT_SELECTION }),
+    describe(view, 3),
+  )
+}
+
+// --- the search is navigation, not selection -----------------------------------
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  const before = view.requests.length
+  treeSearch(tree).props.onChange({ target: { value: 'glm' } })
+  tree = await view.pump()
+  check('поиск не спрашивает хост заново', view.requests.length === before, `${view.requests.length} против ${before}`)
+  check('поиск оставил одну строку', treeRows(tree).map(treeName).join() === 'glm-5.3-flash', treeRows(tree).map(treeName).join(' | '))
+  check(
+    'поиск не тронул отметку найденной модели',
+    checkedModels(tree).join() === 'openrouter/glm-5.3-flash',
+    checkedModels(tree).join(' | ') || '(строк в дереве нет)',
+  )
+  buttonWithText(tree, 'Выбрать все').props.onClick()
+  tree = await view.pump()
+  check(
+    'групповое действие под поиском действует на весь доступный набор',
+    askedFor(view, before, { sort: 'ttft', dir: 'asc', selection: rules({ base: 'all' }) }),
+    describe(view, before),
+  )
+}
+
+// --- the stored selection, and the store that was there before it ---------------
+{
+  const first = mountPanel()
+  let tree = await first.pump()
+  first.requests[0].answer(byTtft)
+  tree = await first.pump()
+  buttonWithText(tree, 'Снять все').props.onClick()
+  tree = await first.pump()
+  const stored = JSON.parse(first.store.get('dsh-model-stats:prefs:v2.selection'))
+  check('выбор записан под версионированным ключом с версией', stored.version === 2, first.store.get('dsh-model-stats:prefs:v2.selection'))
+  check(
+    'и записанный выбор — правило, а не пары',
+    JSON.stringify(stored.selection) === JSON.stringify(rules({ base: 'none' })),
+    JSON.stringify(stored.selection),
+  )
+
+  // The same document, read back by a second panel: what survives a closed tab is
+  // the rule, and the rule is what the next request carries.
+  const second = mountPanel({ prefs: { ...stored } })
+  second.render()
+  check(
+    'выбор переживает повторное открытие вкладки',
+    askedFor(second, 0, { sort: 'ttft', dir: 'asc', selection: rules({ base: 'none' }) }),
+    describe(second, 0),
+  )
+}
+{
+  // A v1 store kept a provider filter. It is a choice the reader made, so it is
+  // migrated once — and an *empty* filter keeps meaning "no filter", never
+  // "nothing selected", which is how a first open would otherwise come up blank for
+  // everyone who never touched that control.
+  const view = mountPanel({ legacyPrefs: { providers: ['codex', 'openrouter'], sort: 'errors', columnsAll: true } })
+  view.render()
+  check(
+    'старый фильтр провайдеров переехал в правила',
+    askedFor(view, 0, {
+      sort: 'errors',
+      dir: 'desc',
+      selection: rules({ providers: { codex: 'all', openrouter: 'all' } }),
+    }),
+    describe(view, 0),
+  )
+  check('и записан под новым ключом', JSON.parse(view.store.get('dsh-model-stats:prefs:v2.selection')).version === 2)
+}
+{
+  const view = mountPanel({ legacyPrefs: { providers: [] } })
+  view.render()
+  check(
+    'пустой старый фильтр — это «без фильтра», а не «ничего не выбрано»',
+    askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: DEFAULT_SELECTION }),
+    describe(view, 0),
+  )
+}
+{
+  // A corrupt rule document is not a question: only a document this panel can read
+  // reaches the host, and what it cannot read falls back to the rule of a first open.
+  const view = mountPanel({ prefs: { selection: { live: { base: 'nonsense', pairs: 'twenty' }, archive: 5 } } })
+  view.render()
+  check(
+    'испорченные правила не уходят на хост',
+    askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: DEFAULT_SELECTION }),
+    describe(view, 0),
+  )
+}
+{
+  // The cache is keyed by the whole question, so an answer about one selection is
+  // never shown for another one.
+  const entries = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
+  const view = mountPanel({ entries, prefs: { selection: rules({ base: 'none' }) } })
+  const tree = view.render()
+  check('кэш чужого выбора не отдан', !hasTable(tree), rowLabels(tree).join(' | ') || '(таблицы нет)')
+}
+{
+  const entries = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
+  const view = mountPanel({ entries })
+  const tree = view.render()
+  check('а кэш своего выбора отдан сразу, без ожидания', hasTable(tree) && rowLabels(tree).length === 3, rowLabels(tree).join(' | '))
+}
+{
+  // The response cache is versioned, the preferences are not. A v2 entry is a full
+  // answer about the same pairs with no rating in any row, so it must not be
+  // served — while the selection the reader built under v2 comes back exactly as
+  // it was, because that is their decision and not a cache.
+  const legacyStore = {
+    entries: { [cacheKey('ttft', 'asc', 'model', { selection: rules({ base: 'none' }) })]: { at: Date.now(), data: byTtft } },
+  }
+  const view = mountPanel({ legacyStore, prefs: { selection: rules({ base: 'none' }) } })
+  let tree = view.render()
+  check('кэш прежней версии не отдан', !hasTable(tree), rowLabels(tree).join(' | ') || '(таблицы нет)')
+  check(
+    'и панель спрашивает заново, с тем же выбором',
+    askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: rules({ base: 'none' }) }),
+    describe(view, 0),
+  )
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  check('а ответ записан уже под новым ключом', Object.keys(JSON.parse(view.store.get('dsh-model-stats:v3')).entries).length === 1)
+  check(
+    'и старый документ панель не переписала',
+    JSON.parse(view.store.get('dsh-model-stats:v2')).entries !== undefined,
+  )
+}
+
+// --- the two views -------------------------------------------------------------
+// The provider view does not drop the selection: a provider aggregate computed over
+// every model of a provider would be an answer to a question the reader did not ask,
+// and the plan's own case — one provider, two selected models — is exactly that.
+{
+  const view = mountPanel({ prefs: { selection: rules({ providers: { openrouter: 'all' } }) } })
+  let tree = await view.pump()
+  check('сохранённый выбор отправлен при открытии', askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { openrouter: 'all' } }) }), describe(view, 0))
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  buttonWithText(tree, 'по моделям').props.onClick()
+  tree = await view.pump()
+  check(
+    'в виде по провайдерам выбор уходит на хост, а не сбрасывается',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', view: 'provider', selection: rules({ providers: { openrouter: 'all' } }) }),
+    describe(view, 1),
+  )
+  view.requests[1].answer({
+    ...byTtft,
+    view: 'provider',
+    coverage: [{ provider: 'codex', selected: 1, total: 2 }],
+    rows: [row('codex', null, { steps: 106, ttftMedian: 3500, tpsMedian: 34.7 })],
+  })
+  tree = await view.pump()
+  check(
+    'провайдерская строка говорит, сколько моделей в ней участвовало',
+    text(tree).includes('1 из 2 моделей'),
+    text(tree).slice(0, 120),
+  )
+  // A provider row has no single pair to rate, and the disclosure under its name
+  // says exactly that instead of showing the components of a score that does not
+  // exist. It is the same sentence the `-` in the rating column carries.
+  check(
+    'провайдерская строка объясняет, что рейтинг — про пару, а не про неё',
+    text(tree).includes('Рейтинг считается для пары провайдер–модель, а эта строка — провайдер целиком'),
+    text(tree).slice(-240),
+  )
+  buttonWithText(tree, 'по провайдерам').props.onClick()
+  tree = await view.pump()
+  check(
+    'возврат к моделям вернул тот же выбор',
+    askedFor(view, 2, { sort: 'ttft', dir: 'asc', selection: rules({ providers: { openrouter: 'all' } }) }),
+    describe(view, 2),
+  )
+}
+
+// --- the page the selection does not fit in ------------------------------------
+// A table that shows part of the selection must say so, and must let the reader ask
+// for the rest — a truncated answer read as the whole one is the failure this notice
+// exists to prevent.
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(payload('ttft', byTtft.rows, { truncated: true, shown: { models: 9, steps: 40, errors: 0 } }))
+  tree = await view.pump()
+  check('усечение названо явно', text(tree).includes('Показаны'), text(tree).slice(0, 120))
+  buttonWithText(tree, 'Показать все').props.onClick()
+  tree = await view.pump()
+  check('и есть чем попросить весь набор', askedFor(view, 1, { sort: 'ttft', dir: 'asc', limit: 2000 }), describe(view, 1))
 }
 
 console.log('\n--- архив: модели вне текущей конфигурации ---')
@@ -869,16 +1848,20 @@ const withArchive = (rows, archive) => payload('ttft', rows, { providerList: PRO
   let tree = await view.pump()
   view.requests[0].answer(withArchive(byTtft.rows, { rows: 1, steps: 106, shown: false }))
   tree = await view.pump()
-  check('архив — отметка в фильтре, а не место в списке провайдеров', archiveCheck(tree) !== null && filterOptions(tree).length === 3)
+  check('архив — отдельная отметка, а не место в дереве', archiveCheck(tree) !== null && treeParents(tree).length === 4, String(treeParents(tree).length))
   check('по умолчанию она снята', archiveCheck(tree)?.props.checked === false)
   check('в ней посчитано, что лежит в архиве', textOf(archiveRow(tree)).includes('штук: 1'), textOf(archiveRow(tree)))
-  check('сводка фильтра про архив молчит, пока он выключен', textOf(filterSummary(tree)) === 'Провайдеры: все', textOf(filterSummary(tree)))
+  check('сводка про архив молчит, пока он выключен', !textOf(filterSummary(tree)).includes('архив'), textOf(filterSummary(tree)))
   check('подвал говорит, сколько строк держит архив', text(tree).includes('в архиве: 1'), text(tree).match(/в архиве[^·]*/)?.[0])
   check('ни одна строка не помечена архивной', nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-archive').length === 0)
 
   archiveCheck(tree).props.onChange({})
   tree = await view.pump()
-  check('отметка уходит на хост одним флагом', view.requests[1]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&archived=1&limit=200', view.requests[1]?.url)
+  check(
+    'отметка уходит на хост одним флагом, не трогая выбор',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', archived: true, selection: DEFAULT_SELECTION }),
+    describe(view, 1),
+  )
   check('ТАБЛИЦА ОСТАЛАСЬ НА ЭКРАНЕ, пока ответ на архив в пути', hasTable(tree))
   check('уведомление называет и архив, а не только провайдеров', text(tree).includes('(архив)'), text(tree).slice(text(tree).indexOf(NOTICE), text(tree).indexOf(NOTICE) + 60))
 
@@ -887,20 +1870,27 @@ const withArchive = (rows, archive) => payload('ttft', rows, { providerList: PRO
   check('ответ с архивом показан целиком', rowLabels(tree).length === 4, rowLabels(tree).join(' | '))
   check('архивная строка помечена словом', nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-archive').length === 1)
   check('и только она', textOf(bodyRows(tree)[0]).includes('архив'), textOf(bodyRows(tree)[0]).slice(0, 60))
-  check('сводка фильтра называет архив', textOf(filterSummary(tree)).includes('+ архив'), textOf(filterSummary(tree)))
+  check('сводка называет архив', textOf(filterSummary(tree)).includes('архив'), textOf(filterSummary(tree)))
   check('подвал не считает архив скрытым, когда он показан', !text(tree).includes('в архиве:'), text(tree).match(/в архиве[^·]*/)?.[0])
-  check('выбор записан в настройки панели', JSON.parse(view.store.get('dsh-model-stats:prefs:v1')).archived === true, view.store.get('dsh-model-stats:prefs:v1'))
-  check('адрес называет архив', String(view.addresses.at(-1)).includes('msArchived=1'), String(view.addresses.at(-1)))
+  check(
+    'отметка записана в настройки панели',
+    JSON.parse(view.store.get('dsh-model-stats:prefs:v2.selection')).archived === true,
+    view.store.get('dsh-model-stats:prefs:v2.selection'),
+  )
+  // The question is no longer written into the address: a selection is a rule
+  // document, and a rule document in a query string is either truncated or visible
+  // to the host's page. The archive went with it, so one surface has one place to
+  // remember what it asked.
+  check('панель не трогает адрес', view.addresses.length === 0, view.addresses.join(' | ') || '(адрес не менялся)')
   check(
     'и кэш — под своим ключом, а не под ключом таблицы без архива',
-    Object.keys(JSON.parse(view.store.get('dsh-model-stats:v1')).entries).some((key) => key.endsWith('|archive')),
-    Object.keys(JSON.parse(view.store.get('dsh-model-stats:v1')).entries).join(' | '),
+    Object.keys(JSON.parse(view.store.get('dsh-model-stats:v3')).entries).some((key) => key.endsWith('|archive')),
+    Object.keys(JSON.parse(view.store.get('dsh-model-stats:v3')).entries).join(' | '),
   )
 
   archiveCheck(tree).props.onChange({})
   tree = await view.pump()
-  check('снятие отметки убирает архив из запроса', view.requests[2]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&limit=200', view.requests[2]?.url)
-  check('и из адреса', !String(view.addresses.at(-1)).includes('msArchived'), String(view.addresses.at(-1)))
+  check('снятие отметки убирает архив из запроса', askedFor(view, 2, { sort: 'ttft', dir: 'asc' }), describe(view, 2))
 }
 
 // --- a host that cannot grade at all ------------------------------------------
@@ -931,37 +1921,254 @@ for (const [label, answer] of [
   check('отметка остаётся под рукой', archiveCheck(tree) !== null)
 }
 
-// --- the archive in the address and in the stored question --------------------
+// --- the archive in the stored question, and the address that no longer holds one -
 {
-  const view = mountPanel({ search: '?msView=model&msArchived=1' })
+  // The keys this panel used to write are read no longer: a selection is a rule
+  // document, and a rule document in a query string is either truncated or visible
+  // to the host's page. A panel that still honoured `msArchived` would open on a
+  // question nobody can see the source of.
+  const view = mountPanel({ search: '?msView=provider&msArchived=1&msSort=errors&keep=1' })
   view.render()
-  check('адрес с архивом открывает архив', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&archived=1&limit=200', view.requests[0]?.url)
+  check(
+    'старые ключи в адресе больше не вопрос панели',
+    askedFor(view, 0, { sort: 'ttft', dir: 'asc' }),
+    describe(view, 0),
+  )
+  check('и адрес не переписывается', view.addresses.length === 0, view.addresses.join(' | ') || '(адрес не менялся)')
 }
 {
   const view = mountPanel({ prefs: { archived: true } })
   view.render()
-  check('сохранённый архив отправлен при открытии', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&archived=1&limit=200', view.requests[0]?.url)
+  check('сохранённый архив отправлен при открытии', askedFor(view, 0, { sort: 'ttft', dir: 'asc', archived: true }), describe(view, 0))
 }
 {
   // A broken preference must not turn the filter on: the archive is the one
   // filter whose default decides what the reader is shown.
   const view = mountPanel({ prefs: { archived: 'yes please' } })
   view.render()
-  check('испорченное значение не включает архив', view.requests[0]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&limit=200', view.requests[0]?.url)
+  check('испорченное значение не включает архив', askedFor(view, 0, { sort: 'ttft', dir: 'asc' }), describe(view, 0))
 }
 {
-  // The reset button lifts the whole filter, and the archive is part of it.
-  const view = mountPanel({ prefs: { providers: ['codex'], archived: true } })
+  // The reset button restores the selection and leaves the archive alone: the
+  // archive is a scope switch with its own visible control, not one of the reader's
+  // marks, and a button named "back to the default selection" that also turned the
+  // archive off would be doing something its name does not say.
+  const view = mountPanel({ prefs: { archived: true, selection: rules({ providers: { codex: 'all' } }) } })
   let tree = await view.pump()
   view.requests[0].answer(withArchive(byTtft.rows, { rows: 1, steps: 106, shown: true }))
   tree = await view.pump()
-  buttonWithText(tree, 'Сбросить').props.onClick()
+  buttonWithText(tree, 'Вернуть выбор по умолчанию').props.onClick()
   tree = await view.pump()
-  check('сброс снимает и провайдеров, и архив', view.requests[1]?.url === '/api/model-stats?sort=ttft&dir=asc&view=model&limit=200', view.requests[1]?.url)
-  check('и записан в настройки', JSON.parse(view.store.get('dsh-model-stats:prefs:v1')).archived === false, view.store.get('dsh-model-stats:prefs:v1'))
+  check(
+    'сброс возвращает правило по умолчанию и не гасит архив',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', archived: true, selection: DEFAULT_SELECTION }),
+    describe(view, 1),
+  )
+  check(
+    'и записан в настройки',
+    JSON.stringify(JSON.parse(view.store.get('dsh-model-stats:prefs:v2.selection')).selection) === JSON.stringify(DEFAULT_SELECTION),
+    view.store.get('dsh-model-stats:prefs:v2.selection'),
+  )
+}
+
+// --- a catalog the host could not read ----------------------------------------
+// `archive: null` from the host is not "nothing is archived": it is "this process
+// cannot see the configuration". The tree then holds the history alone, and the panel
+// has to say so — a configured pair and a retired one look exactly alike in that tree,
+// and a reader who is not told will tick the wrong one.
+{
+  // The catalog such a host would send: the history alone, every entry graded `null`
+  // rather than `false`, because "not in the configuration" is a statement it is not
+  // in a position to make.
+  const historyOnly = [...new Set(byTtft.rows.map((entry) => entry.provider))]
+    .sort()
+    .map((provider) => ({
+      provider,
+      models: byTtft.rows
+        .filter((entry) => entry.provider === provider)
+        .map((entry) => ({ model: entry.model, archived: null, noStats: false, steps: entry.steps })),
+    }))
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(
+    payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, archive: null, catalog: historyOnly }),
+  )
+  tree = await view.pump()
+  check('неизвестный каталог объяснён', text(tree).includes('Каталог этой установки'), text(tree).slice(0, 140))
+  check('и дерево собрано из одной истории', treeParents(tree).map(treeName).join() === 'codex,local-uns,openrouter', treeParents(tree).map(treeName).join(' | '))
+  check('архивная отметка не предлагается', archiveRow(tree) === null)
+  check('и ни одна модель не помечена архивной', nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-archive').length === 0)
+}
+
+// --- the marks under the archive come back with it -----------------------------
+// The archive is a scope of the same selection: turning the archive off does not
+// throw away what the reader marked under it, because a switch that edited a scope
+// nobody can see would be silently rewriting the answer for the moment it is turned
+// back on.
+{
+  // A catalog with one retired pair in it, which is the only kind of entry the
+  // archive scope can be about: the scope applies to the entries the answer grades
+  // as archived, and an answer with the archive off carries none.
+  const withRetired = [
+    ...CATALOG,
+    { provider: 'codex', models: [{ model: 'gpt-5-old', archived: true, noStats: false, steps: 12 }] },
+  ]
+  const saved = rules({ archiveBase: 'all' })
+  const view = mountPanel({ prefs: { archived: true, selection: saved } })
+  let tree = await view.pump()
+  check('обе области сохранённого выбора уходят на хост', askedFor(view, 0, { sort: 'ttft', dir: 'asc', archived: true, selection: saved }), describe(view, 0))
+  const answer = payload('ttft', byTtft.rows, {
+    providerList: PROVIDER_LIST,
+    catalog: withRetired,
+    archive: { rows: 1, steps: 12, shown: true },
+  })
+  view.requests[0].answer(answer)
+  tree = await view.pump()
+  check(
+    'архивная область собрана: три замеренные модели и архивная',
+    textOf(modelsCount(tree)) === '4 из 6',
+    textOf(modelsCount(tree)),
+  )
+  archiveCheck(tree).props.onChange({})
+  tree = await view.pump()
+  check('выключение архива не стирает его отметки', askedFor(view, 1, { sort: 'ttft', dir: 'asc', selection: saved }), describe(view, 1))
+  // The answer with the archive off: it holds the same rows and says the archive
+  // still holds one, so the control stays where the reader left it.
+  view.requests[1].answer(
+    payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, archive: { rows: 1, steps: 12, shown: false } }),
+  )
+  tree = await view.pump()
+  check('и счётчик считает только доступную область', textOf(modelsCount(tree)) === '3 из 5', textOf(modelsCount(tree)))
+  archiveCheck(tree).props.onChange({})
+  tree = await view.pump()
+  check('а возвращение архива возвращает и отметки', askedFor(view, 2, { sort: 'ttft', dir: 'asc', archived: true, selection: saved }), describe(view, 2))
+  view.requests[2].answer(answer)
+  tree = await view.pump()
+  check('и архивная модель снова отмечена', checkedModels(tree).includes('codex/gpt-5-old'), checkedModels(tree).join(' | '))
+}
+
+// --- a request that fails keeps the table, and names the question --------------
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  buttonWithText(tree, 'Снять все').props.onClick()
+  tree = await view.pump()
+  view.requests[1].answer({ ok: false, error: 'boom' }, 500)
+  tree = await view.pump()
+  check('сорванный запрос не убирает таблицу', hasTable(tree) && rowLabels(tree).length === 3, rowLabels(tree).join(' | '))
+  // The failure sentence names the sort and the selection together, because those
+  // are the two halves of the question that did not come back — and a table of the
+  // previous selection shown without them would read as the answer to this one.
+  const stale = 'Показаны строки прежнего запроса'
+  check('и панель говорит, что показывает прежний ответ', text(tree).includes(stale), text(tree).slice(0, 120))
+  check(
+    'называя при этом выбор, о котором спросила',
+    text(tree).includes('выбрано моделей: 0 из 5'),
+    text(tree).slice(text(tree).indexOf(stale), text(tree).indexOf(stale) + 120),
+  )
+}
+
+// --- an answer to a question nobody is asking any more -------------------------
+// A late answer to the previous selection must not be passed off as the current one:
+// the rows stay on screen with a notice naming the wait, and the heading keeps the
+// host's own word for the order it actually sent.
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  buttonWithText(tree, 'Снять все').props.onClick()
+  tree = await view.pump()
+  check('новый выбор спрошен заново', view.requests.length === 2 && view.requests[1].settled === false, String(view.requests.length))
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  check('ответ на прежний выбор не выдан за ответ на новый', text(tree).includes(NOTICE), text(tree).slice(0, 90))
+  check('и таблица прежняя, а не пустая', hasTable(tree) && rowLabels(tree).length === 3, rowLabels(tree).join(' | '))
+}
+
+// --- a browser that refuses to store anything ----------------------------------
+// The panel works in memory and says so once: a reader whose marks disappear on the
+// next visit deserves to be told before they make a hundred of them.
+{
+  const view = mountPanel({ brokenStorage: true })
+  let tree = await view.pump()
+  view.requests[0].answer(byTtft)
+  tree = await view.pump()
+  check('без хранилища панель работает', hasTable(tree) && rowLabels(tree).length === 3, rowLabels(tree).join(' | '))
+  check('и предупреждает, что выбор не сохранится', text(tree).includes('не разрешает сохранять'), text(tree).slice(0, 120))
+  buttonWithText(tree, 'Снять все').props.onClick()
+  tree = await view.pump()
+  check(
+    'выбор всё равно действует в этой вкладке',
+    askedFor(view, 1, { sort: 'ttft', dir: 'asc', selection: rules({ base: 'none' }) }),
+    describe(view, 1),
+  )
 }
 
 // --- the words the panel promises to have -------------------------------------
+{
+  // Every key the panel asks for has to be in both dictionaries. The panel is written
+  // once and rendered in whichever locale the host's service answers, so a key that
+  // exists only in Russian is an English reader looking at a bare key name — and the
+  // check has to read the source to see it, because a missing key renders as a
+  // fallback rather than as an error.
+  const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  const requested = [...new Set([...clientSource.matchAll(/\bt\('([a-zA-Z][\w.]*)'/g)].map((m) => m[1]))]
+  const mod0 = mountPanel().mod
+  const ruKeys = mod0.__test__.MESSAGES.ru
+  const enKeys = mod0.__test__.MESSAGES.en
+  const missingRu = requested.filter((key) => typeof ruKeys[key] !== 'string')
+  const missingEn = requested.filter((key) => typeof enKeys[key] !== 'string')
+  check(
+    `все ${requested.length} запрошенных строк есть в обоих словарях`,
+    missingRu.length === 0 && missingEn.length === 0,
+    `ru: ${missingRu.join(', ') || '-'} / en: ${missingEn.join(', ') || '-'}`,
+  )
+  // The reverse direction as well, but read off the whole source rather than off the
+  // `t('literal')` calls: half the keys arrive through a variable — `t(column.labelKey)`,
+  // a template for the direction of an order — so a scan that only saw literals would
+  // report the whole column set as dead copy.
+  const orphans = Object.keys(ruKeys).filter((key) => !clientSource.includes(key))
+  check(
+    'и в словарях не осталось ключей, которых никто не спрашивает',
+    orphans.length === 0,
+    orphans.slice(0, 12).join(', ') || '(все ключи востребованы)',
+  )
+}
+
+// --- the map of natural directions: the panel's copy against the fold's own -----
+{
+  // The panel draws a heading's arrow before the first answer arrives, so it has to
+  // know which way each order opens without asking the host — and it cannot import
+  // the fold, because the client is a browser bundle with no module resolution into
+  // `lib/`. The map is a restatement, and two copies of one fact are what let eight
+  // orders (`retry` through `interrupted`) go missing from the panel's copy and open
+  // ascending on their first click while the host opened them descending. Neither
+  // side can import the other, so this is where they are held together: key for key
+  // and direction by direction. It is a different question from the sort contract
+  // checked below — that one asks whether the host *accepts* the key a heading
+  // sends, and this one asks which end it starts at.
+  const panelDirs = mountPanel().mod.__test__.SORT_DIRS
+  const panelKeys = Object.keys(panelDirs).sort()
+  const foldKeys = Object.keys(SORT_DIRECTIONS).sort()
+  const onlyPanel = panelKeys.filter((key) => !foldKeys.includes(key))
+  const onlyFold = foldKeys.filter((key) => !panelKeys.includes(key))
+  check(
+    `копия направлений знает те же ${foldKeys.length} порядков, что и фолд`,
+    onlyPanel.length === 0 && onlyFold.length === 0,
+    `панель ${panelKeys.length}, фолд ${foldKeys.length}; только в панели: ${onlyPanel.join(', ') || '-'}; только в фолде: ${onlyFold.join(', ') || '-'}`,
+  )
+  for (const key of foldKeys) {
+    check(
+      `порядок ${key} открывается так же, как его открывает хост`,
+      panelDirs[key] === SORT_DIRECTIONS[key],
+      `панель ${panelDirs[key] ?? '—'}, фолд ${SORT_DIRECTIONS[key]}`,
+    )
+  }
+}
+
 {
   const mod = mountPanel().mod
   const placeholders = (value) => [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort().join()
@@ -969,7 +2176,32 @@ for (const [label, answer] of [
   const en = mod.__test__.MESSAGES.en
   check(
     'слова об архиве есть в обоих словарях',
-    ['filter.group', 'filter.archive', 'filter.archive.short', 'filter.archive.count', 'footer.archive', 'empty.archived', 'hint.archive', 'archive.badge'].every((key) => typeof ru[key] === 'string' && typeof en[key] === 'string'),
+    [
+      'models.open',
+      'models.count',
+      'models.group',
+      'models.search',
+      'models.selectAll',
+      'models.selectNone',
+      'models.reset',
+      'models.resetDefault',
+      'models.empty',
+      'models.providerCount',
+      'models.note',
+      'models.truncated',
+      'models.showAll',
+      'models.storage',
+      'empty.selection',
+      'empty.selected',
+      'announce.selection.reset',
+      'filter.archive',
+      'filter.archive.short',
+      'filter.archive.count',
+      'footer.archive',
+      'empty.archived',
+      'hint.archive',
+      'archive.badge',
+    ].every((key) => typeof ru[key] === 'string' && typeof en[key] === 'string'),
     Object.keys(ru).filter((key) => !(key in en)).join(' | ') || '(все ключи на месте)',
   )
   check(
@@ -1001,7 +2233,10 @@ const NEVER_USED = row('ollama', 'qwen3-coder:30b', { steps: 0, lastSeen: null, 
   tree = await view.pump()
 
   check('строка конфигурации без замеров нарисована как строка', rowLabels(tree).length === 4, rowLabels(tree).join(' | '))
-  const marks = nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-nostats')
+  // Scoped to the table: the tree marks the same kind of row for its own reason —
+  // a pair the configuration serves and no session has run is exactly the entry a
+  // reader ticks — and a check that counted both would never see one of them.
+  const marks = nodesWhere(nodesWhere(tree, (node) => node.type === 'table')[0], (node) => node.props?.className === 'dsh-ms-nostats')
   check('и помечена словом', marks.length === 1 && textOf(marks[0]) === 'нет статистики', marks.map(textOf).join(' | ') || '(метки нет)')
   check(
     'метка стоит на своей строке, а не на всех',
@@ -1037,7 +2272,10 @@ const NEVER_USED = row('ollama', 'qwen3-coder:30b', { steps: 0, lastSeen: null, 
   view.requests[0].answer(payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, noStats: null }))
   tree = await view.pump()
   check('хост без каталога о таких строках молчит', !text(tree).includes('без статистики'))
-  check('и ни одна строка не помечена', nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-nostats').length === 0)
+  check(
+    'и ни одна строка таблицы не помечена',
+    nodesWhere(nodesWhere(tree, (node) => node.type === 'table')[0], (node) => node.props?.className === 'dsh-ms-nostats').length === 0,
+  )
 }
 {
   // What the host answers on a fresh install: no history at all, and the
@@ -1128,7 +2366,7 @@ console.log('\n--- правила, которые панель обещает --
 // bad one. Both ends come out of one ranking (see `ranked` in the panel), and
 // the heading tooltips have to carry the rule to whoever hovers.
 {
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: byTtft } } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } } })
   const tree = view.render()
 
   // byTtft: ttft 46 / 985 / 3500 ms, tps 0.5 / 32.2 / 34.7 tok/s.
@@ -1178,7 +2416,7 @@ console.log('\n--- правила, которые панель обещает --
 {
   // Nothing to compare against: one row is neither the best nor the worst.
   const single = payload('ttft', [row('local-uns', 'Ornith-9B', { steps: 28, ttftMedian: 46, tpsMedian: 30 })])
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: single } } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: single } } })
   const tree = view.render()
   const tones = [...columnCells(tree, 'ttft'), ...columnCells(tree, 'tps')].map(([, cls]) => cls)
   check('единственная строка не выделена ни лучшей, ни худшей', tones.every((cls) => cls === 'dsh-ms-num'), tones.join(', '))
@@ -1191,7 +2429,7 @@ console.log('\n--- правила, которые панель обещает --
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, tpsMedian: 12 }),
     row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: null, tpsMedian: 34.7 }),
   ])
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: unmeasured } } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: unmeasured } } })
   const tree = view.render()
   const ttft = columnCells(tree, 'ttft')
   const tps = columnCells(tree, 'tps')
@@ -1202,7 +2440,7 @@ console.log('\n--- правила, которые панель обещает --
 
 console.log('\n--- сортировка по клику на заголовок столбца ---')
 {
-  const cached = { 'ttft.asc|model|': { at: Date.now(), data: byTtft } }
+  const cached = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
   const view = mountPanel({ entries: cached })
   let tree = await view.pump()
 
@@ -1217,12 +2455,12 @@ console.log('\n--- сортировка по клику на заголовок 
 
   check(
     'клик по заголовку шагов запросил у хоста сортировку steps по убыванию',
-    view.requests[1]?.url === '/api/model-stats?sort=steps&dir=desc&view=model&limit=200',
-    view.requests[1]?.url,
+    askedFor(view, 1, { sort: 'steps', dir: 'desc' }),
+    describe(view, 1),
   )
   check('колонка шагов получила aria-sort=descending', ariaSort(tree, 'steps') === 'descending')
   check('колонка отклика вернулась в aria-sort=none', ariaSort(tree, 'ttft') === 'none')
-  check('в настройках сохранён порядок steps.desc', view.store.get('dsh-model-stats:prefs:v1')?.includes('"sort":"steps"') && view.store.get('dsh-model-stats:prefs:v1')?.includes('"dir":"desc"'))
+  check('в настройках сохранён порядок steps.desc', view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"sort":"steps"') && view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"desc"'))
 
   // Click on "steps" heading again to flip direction
   sortButton(tree, 'steps').props.onClick()
@@ -1230,11 +2468,11 @@ console.log('\n--- сортировка по клику на заголовок 
 
   check(
     'повторный клик развернул направление на steps.asc',
-    view.requests[2]?.url === '/api/model-stats?sort=steps&dir=asc&view=model&limit=200',
-    view.requests[2]?.url,
+    askedFor(view, 2, { sort: 'steps', dir: 'asc' }),
+    describe(view, 2),
   )
   check('колонка шагов получила aria-sort=ascending', ariaSort(tree, 'steps') === 'ascending')
-  check('в настройках сохранён порядок steps.asc', view.store.get('dsh-model-stats:prefs:v1')?.includes('"dir":"asc"'))
+  check('в настройках сохранён порядок steps.asc', view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"asc"'))
 }
 
 {
@@ -1245,8 +2483,8 @@ console.log('\n--- сортировка по клику на заголовок 
   await view.pump()
   check(
     'восстановление сортировки по глубокой метрике (cache) и направлению из prefs',
-    view.requests[0]?.url === '/api/model-stats?sort=cache&dir=desc&view=model&limit=200',
-    view.requests[0]?.url,
+    askedFor(view, 0, { sort: 'cache', dir: 'desc' }),
+    describe(view, 0),
   )
 }
 
@@ -1260,20 +2498,26 @@ console.log('\n--- сортировка по клику на заголовок 
   // looks like a control has to be one, and that is asserted here as "no heading
   // is left without a button" rather than as "exactly one heading is exempt",
   // which would keep passing after the exemption quietly moved somewhere else.
-  const cached = { 'ttft.asc|model|': { at: Date.now(), data: byTtft } }
+  const cached = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
   const view = mountPanel({ entries: cached, prefs: { columnsAll: true } })
   const tree = await view.pump()
   const tableHeadings = headings(tree)
   check('полный вид группирует однотипные метрики',
     tableHeadings.map((th) => th.props.key).join(',') ===
-      'name,liveness,steps,lastSeen,ttft,ttftP90,ttftClean,retry,e2e,tps,tpsMax,confidence,errorRate,modelErrors,errors,interrupted,llm,prefill,overhead,cache')
+      'name,liveness,rating,steps,lastSeen,ttft,ttftP90,ttftClean,retry,e2e,tps,tpsMax,confidence,errorRate,modelErrors,errors,interrupted,llm,prefill,overhead,cache')
   // The count is derived from PANEL_SORTS rather than written down, so adding a
   // column cannot leave a stale literal here that only fails on the next person
   // to run the tool. One heading per sort key, and every heading is one.
-  const expectedHeadings = PANEL_SORTS.length
+  //
+  // This used to carry `ACCEPTED_NOT_YET_DRAWN = ['rating']`, the one gap the
+  // stage split allowed: the host accepted an order (`SORTS` in stage 4) before
+  // the panel drew the column that asks for it (stage 7). The column is drawn, so
+  // the allowance is gone rather than narrowed — and the check is once again
+  // symmetric, which is what it was for: a key whose column nobody drew and a
+  // column whose key the host would refuse both fail here.
   check(
-    `развёрнутая таблица показывает все ${expectedHeadings} колонок`,
-    tableHeadings.length === expectedHeadings,
+    `развёрнутая таблица показывает все ${PANEL_SORTS.length} колонок`,
+    tableHeadings.length === PANEL_SORTS.length,
     `length=${tableHeadings.length}`,
   )
 
@@ -1291,9 +2535,7 @@ console.log('\n--- сортировка по клику на заголовок 
     const colBtn = headingFor(subTree, th.props.key)?.props.children.find((c) => typeof c === 'object' && c?.type === 'button')
     colBtn.props.onClick()
     await subView.pump()
-    const reqUrl = subView.requests[1]?.url
-    const sortParam = new URL(reqUrl, 'http://localhost').searchParams.get('sort')
-    keys.push(sortParam)
+    keys.push(sentBody(subView, 1)?.sort)
   }
 
   check(
@@ -1307,9 +2549,9 @@ console.log('\n--- сортировка по клику на заголовок 
     unsorted.join(', ') || '(нет)',
   )
   check(
-    'ключи колонок покрывают все PANEL_SORTS',
+    'и у каждого принимаемого ключа хоста есть свой заголовок',
     PANEL_SORTS.every((k) => keys.includes(k)),
-    PANEL_SORTS.filter((k) => !keys.includes(k)).join(', '),
+    PANEL_SORTS.filter((k) => !keys.includes(k)).join(', ') || '(все нарисованы)',
   )
 }
 
@@ -1321,7 +2563,7 @@ console.log('\n--- сортировка по клику на заголовок 
   // front of it would silently hand the pin to that column, and 'dsh-ms-left'
   // cannot stand in: the status column is left-aligned too. So the invariant the
   // selector rests on is asserted here rather than left in a stylesheet comment.
-  const cached = { 'ttft.asc|model|': { at: Date.now(), data: byTtft } }
+  const cached = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
   const view = mountPanel({ entries: cached })
   const tree = await view.pump()
   const firstHeading = headings(tree)[0]
@@ -1341,7 +2583,7 @@ console.log('\n--- сортировка по клику на заголовок 
   // reader who orders by status is asking what is wrong right now. The second
   // click is the reversal, like every other column — the one order whose rows do
   // not move on the second click would be an order with a second rule.
-  const cached = { 'ttft.asc|model|': { at: Date.now(), data: byTtft } }
+  const cached = { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } }
   const view = mountPanel({ entries: cached })
   let tree = await view.pump()
 
@@ -1349,22 +2591,22 @@ console.log('\n--- сортировка по клику на заголовок 
   tree = await view.pump()
   check(
     'клик по заголовку статуса просит хост порядок по статусу, худшим сверху',
-    view.requests[1]?.url === '/api/model-stats?sort=liveness&dir=desc&view=model&limit=200',
-    view.requests[1]?.url,
+    askedFor(view, 1, { sort: 'liveness', dir: 'desc' }),
+    describe(view, 1),
   )
   check('колонка статуса получила aria-sort=descending', ariaSort(tree, 'liveness') === 'descending')
   check(
     'в настройках сохранён порядок liveness.desc',
-    view.store.get('dsh-model-stats:prefs:v1')?.includes('"sort":"liveness"') &&
-      view.store.get('dsh-model-stats:prefs:v1')?.includes('"dir":"desc"'),
+    view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"sort":"liveness"') &&
+      view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"desc"'),
   )
 
   sortButton(tree, 'liveness').props.onClick()
   tree = await view.pump()
   check(
     'повторный клик перевернул направление на liveness.asc',
-    view.requests[2]?.url === '/api/model-stats?sort=liveness&dir=asc&view=model&limit=200',
-    view.requests[2]?.url,
+    askedFor(view, 2, { sort: 'liveness', dir: 'asc' }),
+    describe(view, 2),
   )
   check('колонка статуса получила aria-sort=ascending', ariaSort(tree, 'liveness') === 'ascending')
 }
@@ -1376,7 +2618,7 @@ console.log('\n--- сортировка по клику на заголовок 
   // its arrow would be claiming an order its rows are not in, out loud to a
   // screen reader. The echoed order is the one field that can contradict the
   // question, so it is what the arrow is drawn from.
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: byTtft } } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } } })
   let tree = await view.pump()
   sortButton(tree, 'liveness').props.onClick()
   tree = await view.pump()
@@ -1417,7 +2659,7 @@ console.log('\n--- сортировка по клику на заголовок 
     }),
   ], { providerList: PROVIDER_LIST })
   const view = mountPanel({
-    entries: { 'liveness.desc|model|': { at: Date.now(), data: hostVerdict } },
+    entries: { [cacheKey('liveness', 'desc', 'model')]: { at: Date.now(), data: hostVerdict } },
     prefs: { sort: 'liveness', dir: 'desc' },
   })
   const tree = await view.pump()
@@ -1463,7 +2705,7 @@ console.log('--- живость: что кружок имеет право ут�
     row('openrouter', 'never-checked', { lastSeen: probeAt - 5_000 }),
   ])
 
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: livePayload } }, prefs: { columnsAll: true } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: livePayload } }, prefs: { columnsAll: true } })
   const tree = await view.pump()
 
   const dots = nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-live-dot')
@@ -1523,14 +2765,14 @@ console.log('--- живость: что кружок имеет право ут�
   const cached = payload('ttft', [
     row('openrouter', 'glm-5.3-flash', { lastSeen: probeAt - 1000 }),
   ])
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: cached } }, prefs: { columnsAll: true } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: cached } }, prefs: { columnsAll: true } })
   const tree = await view.pump()
 
   const circle = nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-live-button')[0]
   circle.props.onClick()
   await view.pump()
 
-  const post = view.requests.find((entry) => entry.method === 'POST')
+  const post = view.requests.find((entry) => entry.method === 'POST' && entry.url === '/api/model-stats/liveness/check')
   check('клик по кружку отправляет POST на маршрут проверки', post?.url === '/api/model-stats/liveness/check', post?.url)
   check(
     'клик проверяет одну модель, а не весь каталог',
@@ -1541,10 +2783,52 @@ console.log('--- живость: что кружок имеет право ут�
   // The host answers a sweep immediately and keeps working, so the panel has to
   // follow the work down its own count rather than treat the first answer as the
   // last one.
-  const sweep = nodesWhere(tree, (node) => node.type === 'button').find((node) => textOf(node) === 'Проверить все')
+  const buttons = () => nodesWhere(tree, (node) => node.type === 'button')
+  const sweep = buttons().find((node) => textOf(node) === 'Проверить все')
   check('есть кнопка проверки всех моделей', sweep !== undefined)
-  const stale = nodesWhere(tree, (node) => node.type === 'button').find((node) => textOf(node) === 'Только устаревшие')
-  check('есть кнопка проверки только устаревших', stale !== undefined)
+  check(
+    'у кнопки проверки всех есть подсказка про её охват',
+    typeof sweep?.props.title === 'string' && sweep.props.title.includes('все настроенные модели'),
+    sweep?.props.title?.slice(0, 60),
+  )
+
+  // The second half of the probe pair names its scope instead of naming a
+  // freshness window nobody can see: the models the reader ticked. That is the
+  // whole point of the rename — the old button said "the stale ones", and what
+  // counted as stale was a five-minute rule inside the host.
+  const selected = buttons().find((node) => textOf(node) === 'Проверить выбранные')
+  check('есть кнопка проверки выбранных, а кнопки «только устаревшие» больше нет',
+    selected !== undefined && buttons().every((node) => textOf(node) !== 'Только устаревшие'))
+  check(
+    'у кнопки проверки выбранных есть подсказка про её охват',
+    typeof selected?.props.title === 'string' && selected.props.title.includes('отмечены в дереве'),
+    selected?.props.title?.slice(0, 60),
+  )
+
+  // The catalog this answer carried has four measured pairs over four providers,
+  // and the default rule selects exactly those — so the button is live here, and
+  // what it sends is the selection and nothing else.
+  check('выбор по умолчанию не пуст, кнопка активна', selected?.props['aria-disabled'] === false, String(selected?.props['aria-disabled']))
+  selected.props.onClick()
+  await view.pump()
+  const chosen = view.requests
+    .filter((entry) => entry.method === 'POST' && entry.url === '/api/model-stats/liveness/check')
+    .at(-1)
+  const sentPairs = chosen?.body?.pairs
+  check(
+    'кнопка проверки выбранных отправляет список пар, а не вопрос о каталоге',
+    Array.isArray(sentPairs) && chosen?.body?.all !== true && chosen?.body?.pairs !== undefined,
+    JSON.stringify(chosen?.body)?.slice(0, 120),
+  )
+  check(
+    'список — ровно отмеченные измеренные пары, и он упорядочен',
+    JSON.stringify(sentPairs) === JSON.stringify([
+      { provider: 'codex', model: 'gpt-6-astra' },
+      { provider: 'local-uns', model: 'Ornith-9B' },
+      { provider: 'openrouter', model: 'glm-5.3-flash' },
+    ]),
+    JSON.stringify(sentPairs),
+  )
 }
 
 // --- лимит: отказ провайдера — это ответ, а не поломка модели ----------------
@@ -1600,7 +2884,7 @@ console.log('--- лимит: отказ провайдера — это отве
     refused('topup-model', { provider: 'openrouter', model: 'topup-model', status: 'fail', code: 'RATE_LIMIT', error: '429: {"code":429,"message":"Free models are for active keys. The last top-up on this key was 2026-09-21, which is more than 7 days ago. Top it up to use free models again.","type":"api_error"}', httpStatus: null, checkedAt: probeAt, latencyMs: 140, source: 'llm' }, probeAt - 120_000),
   ])
 
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: limitPayload } }, prefs: { columnsAll: true } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: limitPayload } }, prefs: { columnsAll: true } })
   const tree = await view.pump()
 
   const dots = nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-live-dot')
@@ -1675,7 +2959,7 @@ console.log('--- лимит: отказ провайдера — это отве
   // nothing else: the circumstances move into the tooltip rather than widening a
   // cell every row has to share — and nothing is lost for a reader who cannot
   // hover, because the same sentence is the button's own accessible name.
-  const short = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: limitPayload } }, prefs: { columnsAll: false } })
+  const short = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: limitPayload } }, prefs: { columnsAll: false } })
   const shortTree = await short.pump()
   check(
     'в кратком наборе колонок строка обстоятельств не рисуется',
@@ -1741,7 +3025,7 @@ console.log('--- чей ход: круг говорит, кто должен ч�
     row('openrouter', 'silent', { lastSeen: probeAt - 120_000, liveness: at('silent', '', null) }),
   ])
 
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: configPayload } }, prefs: { columnsAll: true } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: configPayload } }, prefs: { columnsAll: true } })
   const tree = await view.pump()
 
   const states = nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-live-dot').map((dot) => dot.props['data-state'])
@@ -1857,11 +3141,11 @@ console.log('--- конец проверки: «проверяю…» не пе�
   const cached = payload('ttft', [
     row('openrouter', 'glm-5.3-flash', { lastSeen: probeAt - 1000, livenessChecking: true }),
   ])
-  const view = mountPanel({ entries: { 'ttft.asc|model|': { at: Date.now(), data: cached } }, prefs: { columnsAll: true } })
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: cached } }, prefs: { columnsAll: true } })
   let tree = await view.pump()
 
   const dotState = (node) => nodesWhere(node, (entry) => entry.props?.className === 'dsh-ms-live-dot')[0]?.props['data-state']
-  const tableGets = () => view.requests.filter((entry) => entry.method === 'GET' && entry.url.startsWith('/api/model-stats?'))
+  const tableGets = () => view.requests.filter((entry) => entry.method === 'POST' && entry.url === '/api/model-stats/query')
   check('строка, помеченная хостом как проверяемая, нарисована «проверяю…»', dotState(tree) === 'checking', dotState(tree))
 
   // The sweep the flag came from: the host answers at once and keeps working, so
@@ -1869,7 +3153,7 @@ console.log('--- конец проверки: «проверяю…» не пе�
   const sweep = nodesWhere(tree, (node) => node.type === 'button').find((node) => textOf(node) === 'Проверить все')
   sweep.props.onClick()
   await view.pump()
-  const post = view.requests.find((entry) => entry.method === 'POST')
+  const post = view.requests.find((entry) => entry.method === 'POST' && entry.url.startsWith('/api/model-stats/liveness'))
   check('кнопка проверки отправила запрос', post !== undefined)
   post.answer({ ok: true, running: true, total: 1, done: 0, pending: 1, checking: ['openrouter\u0000glm-5.3-flash'], results: [] })
   tree = await view.pump()
@@ -1896,12 +3180,12 @@ console.log('--- конец проверки: «проверяю…» не пе�
   check(
     'проверка кончилась — панель перезапрашивает строки, а не держит «проверяю…»',
     tableGets().length === before + 1,
-    `GET: ${before} → ${tableGets().length}`,
+    `запросов таблицы: ${before} → ${tableGets().length}`,
   )
   check(
     'перезапрос задаёт тот же вопрос, что и раньше',
-    tableGets().at(-1).url === tableGets()[0].url,
-    `${tableGets()[0].url} → ${tableGets().at(-1).url}`,
+    JSON.stringify(sentBody(view, view.requests.indexOf(tableGets().at(-1)))) === JSON.stringify(sentBody(view, view.requests.indexOf(tableGets()[0]))),
+    `${JSON.stringify(sentBody(view, view.requests.indexOf(tableGets()[0])))} → ${JSON.stringify(sentBody(view, view.requests.indexOf(tableGets().at(-1))))}`,
   )
 
   tableGets().at(-1).answer(payload('ttft', [row('openrouter', 'glm-5.3-flash', { lastSeen: probeAt })]))
@@ -1910,7 +3194,7 @@ console.log('--- конец проверки: «проверяю…» не пе�
   check(
     'второго перезапроса нет: переход сработал один раз',
     tableGets().length === before + 1,
-    `GET всего: ${tableGets().length}`,
+    `запросов таблицы всего: ${tableGets().length}`,
   )
 }
 
