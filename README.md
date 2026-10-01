@@ -261,7 +261,15 @@ so all three factors describe the same steps — a latency-only fallback when
 usage is missing would compare one route's ttft against another's under a shared
 score. The three floors (100 ms, 8 tokens, 4 fragments) are a single shared
 definition in `lib/eligibility.js`, re-exported by the fold, so the rating and
-the `tps` column cannot drift apart about which steps count.
+the `tps` column cannot drift apart about which steps count. Measured on this
+history the floor is cheap where a model streams normally and decisive where it
+does not: it drops 425 of 9926 eligible `deepseek-official/deepseek-flash`
+steps (4.3%) and 402 of 2370 for `openrouter/stealth/space-bunny-alpha` (17%),
+but 1419 of 1468 for `limitdeckai2/deepseek-v4-flash` (96.7%) — and the fastest
+of the steps it removes there is 5454 tok/s, which is a flush being divided by a
+span, not a decode. That is the whole argument for the floor, and it is also why
+a coverage column of 3.2% is a fact about a route rather than a defect in the
+table.
 
 **Weight is recency, and there is no cutoff.** A measurement 30 days older than
 the pair's newest usable one counts half, 60 days a quarter, and older keeps
