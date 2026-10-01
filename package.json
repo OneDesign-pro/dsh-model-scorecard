@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Per-model and per-provider speed/stability analytics folded from DSH session history, with zero runtime dependencies.",
+  "icon": "icon.svg",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -29,6 +30,7 @@
     "tools/",
     "client.js",
     "cordis.patch.yml",
+    "icon.svg",
     "locale/",
     "README.md",
     "COMPARISON.md",
