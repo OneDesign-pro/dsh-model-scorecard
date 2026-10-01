@@ -1096,6 +1096,48 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The scopes one provider's group spans, and the rule it stands on.
+     *
+     * A group is drawn as one row with one count, and its checkbox is one click
+     * about one provider — so the click has to reach every model in the group. That
+     * is only true while every model belongs to the same scope. A provider that kept
+     * a model and retired another has models in both, and a rule written into one of
+     * them changed fewer rows than the checkbox promised: the other half kept
+     * whatever its own scope said, and the next click started its cycle from a rule
+     * the reader had not just set.
+     *
+     * So the group spans every scope its models are in — the same shape
+     * `rulesForAll` gives the global buttons, for the same reason: the two scopes
+     * are two halves of one decision about a provider, and a decision about half a
+     * provider is not what the reader clicked.
+     *
+     * The standing rule is read across the same scopes, and the order is not
+     * arbitrary: a group the reader cleared stays cleared even when only one half
+     * carries the `none`, because the next state of a cleared group is its measured
+     * models rather than a fresh "all"; and `measured` outranks an absent rule,
+     * because it is the one state the marks cannot express and a group that
+     * declared it on either half has it.
+     *
+     * The archive being off is not a case here: `selectionCatalog` leaves archived
+     * models out of the tree until the archive is on, so a group the reader can see
+     * while it is off is a live group and spans `live` alone.
+     */
+    function providerGroupScopes(group, rules) {
+      const hasArchived = group.models.some((entry) => entry.archived === true)
+      const hasLive = group.models.some((entry) => entry.archived !== true)
+      const scopes = hasArchived && hasLive ? SELECTION_SCOPES : hasArchived ? ['archive'] : ['live']
+      const standing = scopes
+        .map((scope) => rules?.[scope]?.providers?.[group.provider])
+        .filter((value) => value !== undefined)
+      const rule = standing.includes('none')
+        ? 'none'
+        : standing.includes('measured')
+          ? 'measured'
+          : (standing[0] ?? null)
+      return { scopes, rule }
+    }
+
+    /**
      * The global buttons: every item available under the current archive state.
      *
      * The archive being off is not a reason to write marks into a scope nobody can
@@ -1766,7 +1808,6 @@ window.__ModuleLoader__.load({
             'span',
             { className: 'dsh-ms-val' },
             ctx.fmt.pct(row.retryRate),
-            measurementScale(ctx, 'retry', row.retryRate),
           )
         },
         // Amber once a fifth of the steps need a retry, red past a third: a
@@ -1821,7 +1862,6 @@ window.__ModuleLoader__.load({
             'span',
             { className: 'dsh-ms-val' },
             ctx.fmt.pct(row.prefillShareMedian),
-            measurementScale(ctx, 'prefill', row.prefillShareMedian),
           )
         },
       },
@@ -1924,6 +1964,17 @@ window.__ModuleLoader__.load({
      * The list is the metrics, not the columns: a count (`шагов`) is the size of the
      * sample rather than a figure about the model, and a bar under it would be read
      * as "the busiest model" next to a column of latencies.
+     * Two columns of the full set are deliberately absent, and the reason belongs
+     * here rather than in their cells, so a reader of the table of columns does not
+     * have to infer it from cells that look exactly like the four beside them:
+     * `префилл` is a share that is *better* when it is low, so a longer bar would read
+     * as a worse model — the opposite of every other bar in the table — and `ретраи`
+     * is a share of a column whose own comment already says it cannot rank two routes
+     * by itself, which a bar would contradict. Both cells used to call
+     * `measurementScale` anyway and get `undefined` out of this table, so their markup
+     * promised a bar the table never drew; the calls are gone, and
+     * `tools/verify-panel-state.mjs` asserts that both still draw none, in the full
+     * column set, so the decision cannot be lost by accident.
      */
     const SCALED = {
       ttft: 'ttftMedian',
@@ -3415,9 +3466,19 @@ window.__ModuleLoader__.load({
        * cleared, and an empty one comes back as its measured models. The rule it
        * writes is what makes the group stay a decision — a model the provider gains
        * later follows it.
+       *
+       * The scopes it writes are the ones `providerGroupScopes` named, which is
+       * both of them for a group that spans both, and the next state is asked for
+       * once and written to each: two scopes holding the same rule are one decision
+       * about a provider, which is what a single row with a single count promises.
        */
-      const chooseProviderGroup = (scope, provider, rule, counts) => {
-        applySelection(rulesWithProvider(selection, scope, provider, nextProviderRule(rule, counts)))
+      const chooseProviderGroup = (group, groupRules, counts) => {
+        const nextRule = nextProviderRule(groupRules.rule, counts)
+        const next = groupRules.scopes.reduce(
+          (document, scope) => rulesWithProvider(document, scope, group.provider, nextRule),
+          selection,
+        )
+        applySelection(next)
       }
       const chooseEveryModel = (base) => {
         applySelection(rulesForAll(selection, base, archived))
@@ -3477,13 +3538,14 @@ window.__ModuleLoader__.load({
         if (models.length === 0) continue
         const counts = coverageOf.get(group.provider) ?? { selected: 0, total: group.models.length }
         const partial = counts.selected > 0 && counts.selected < counts.total
-        const scope = group.models.some((entry) => entry.archived === true) ? 'archive' : 'live'
-        // The rule standing on the group, if any: the click reads it to know which
-        // step of its cycle this is, and the tree reads it to name the one state the
-        // marks cannot express — a hand-picked set of exactly the measured models
-        // looks the same, and the difference is what happens to a model nobody has
-        // run yet.
-        const rule = selection?.[scope]?.providers?.[group.provider]
+        // Which scopes this group spans, and the rule it stands on read across all
+        // of them: a group is one row with one count, so its click is one decision
+        // over the whole group (see `providerGroupScopes`). The rule is named here
+        // because the tree reads it to name the one state the marks cannot express —
+        // a hand-picked set of exactly the measured models looks the same, and the
+        // difference is what happens to a model nobody has run yet.
+        const groupRules = providerGroupScopes(group, selection)
+        const rule = groupRules.rule
         const measured = rule === 'measured'
         treeGroups.push(
           h(
@@ -3509,7 +3571,7 @@ window.__ModuleLoader__.load({
                 ref: (element) => {
                   if (element !== null && element !== undefined) element.indeterminate = partial
                 },
-                onChange: () => chooseProviderGroup(scope, group.provider, rule, counts),
+                onChange: () => chooseProviderGroup(group, groupRules, counts),
               }),
               h(
                 'span',
@@ -3537,7 +3599,12 @@ window.__ModuleLoader__.load({
                   checked: resolved.pairs.has(pairKeyOf(group.provider, entry.model)),
                   onChange: () =>
                     choosePair(
-                      scope,
+                      // This model's own scope, not the one the group guessed: in a
+                      // group of both halves a live model belongs to the live scope,
+                      // and an exception written into the archive would govern a
+                      // model the reader did not click — the box would answer the
+                      // second click instead of the first.
+                      entry.archived === true ? 'archive' : 'live',
                       group.provider,
                       entry.model,
                       !resolved.pairs.has(pairKeyOf(group.provider, entry.model)),

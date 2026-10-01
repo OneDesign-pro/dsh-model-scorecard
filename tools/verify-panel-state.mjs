@@ -28,7 +28,7 @@ import vm from 'node:vm'
 // asks for an order the route does not know would be answered with the default
 // order and shown under an arrow claiming otherwise, and only a shared list
 // catches that.
-import { PANEL_SORTS } from '../lib/collect.js'
+import { PANEL_SORTS, resolveSelection } from '../lib/collect.js'
 // The fold's own map of natural directions, compared below against the copy the
 // bundle declares. The two cannot import each other (the client is a browser
 // bundle with no module resolution into `lib/`), so they are pinned from here.
@@ -1407,13 +1407,12 @@ console.log('--- полоска под числом: доля от наибол�
 }
 
 {
-  // The full column set draws its bars from the same table of maxima, so the two
-  // columns that named a metric this pass does not measure — `ретраи` and
-  // `префилл`, whose cells have asked for a bar since they were written — must
-  // still draw none. That is the current decision and not an oversight: a bar under
-  // every figure makes the three scaled columns read like six, and the fix, if it
-  // is wanted, is one line in `SCALED`. Asserted so the next reader can tell the
-  // difference between "not asked for" and "silently stopped working".
+  // The full column set draws its bars from the same table of maxima, and two
+  // columns are deliberately not in that table: `ретраи` and `префилл`. Their cells
+  // used to ask for a bar anyway and draw nothing, because the lookup missed — a
+  // markup promise the table never kept. The calls are gone now, so this asserts the
+  // decision rather than an accident of the lookup, and it stays here so the next
+  // reader can tell "not asked for" from "silently stopped working".
   const scaled = payload('ttft', [
     row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, e2eTpsMedian: 40, errorRate: 8, retryRate: 0.1 }),
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, e2eTpsMedian: 80, errorRate: 0.1, retryRate: 0.4 }),
@@ -1430,7 +1429,7 @@ console.log('--- полоска под числом: доля от наибол�
     return nodesWhere(bodyRows(tree)[index].props.children[column], (node) => node.props?.className === 'dsh-ms-scale').length
   }
   check(
-    'столбец, чья метрика не объявлена в SCALED, полоски не рисует',
+    'столбец, которого нет в SCALED, полоски не рисует',
     barIn('retry', 0) === 0 && barIn('prefill', 0) === 0,
     `ретраи: ${barIn('retry', 0)}, префилл: ${barIn('prefill', 0)}`,
   )
@@ -1997,6 +1996,136 @@ const withArchive = (rows, archive) => payload('ttft', rows, { providerList: PRO
   archiveCheck(tree).props.onChange({})
   tree = await view.pump()
   check('снятие отметки убирает архив из запроса', askedFor(view, 2, { sort: 'ttft', dir: 'asc' }), describe(view, 2))
+}
+
+// --- a provider that kept a model and retired another -------------------------
+//
+// One group, one row, one count — and a catalog whose models are in both scopes.
+// The count beside the checkbox is the host's own over the whole group
+// (`coverage`), so the click has to reach the whole group too. It used to guess one
+// scope from the first archived model it found and write the rule there: the click
+// changed fewer rows than the checkbox promised, and a second click started from a
+// rule the reader had not set. Each model's own row had the same guess, so ticking
+// one live model of such a group wrote an exception into a scope that never governs
+// it and nothing happened.
+const MIXED_CATALOG = [
+  {
+    provider: 'codex',
+    models: [
+      { model: 'gpt-6-astra', archived: false, noStats: false, steps: 106 },
+      { model: 'gpt-6-retired', archived: true, noStats: false, steps: 40 },
+      { model: 'gpt-6-mini', archived: false, noStats: true, steps: 0 },
+    ],
+  },
+  { provider: 'openrouter', models: [{ model: 'glm-5.3-flash', archived: false, noStats: false, steps: 5 }] },
+]
+const MIXED_RETIRED = row('codex', 'gpt-6-retired', {
+  steps: 40,
+  ttftMedian: 4100,
+  tpsMedian: 30.1,
+  lastSeen: 900,
+  archived: true,
+})
+/**
+ * An answer to a mixed-catalog question, with the count the host would send.
+ *
+ * `coverage` is not written by hand: the panel reads the number beside a provider
+ * straight out of it, so a fixture that pinned it would make the whole cycle — a
+ * click, a count, the next click — test a number the case invented. The host's own
+ * `resolveSelection` is asked instead, which is also the point of using it here:
+ * the group action and the count it must satisfy are the same resolution read from
+ * two sides, and the fixture reads it from the same side the host does.
+ */
+const mixedPayload = (rows, selection = DEFAULT_SELECTION) =>
+  payload('ttft', rows, {
+    providerList: PROVIDER_LIST,
+    archive: { rows: 1, steps: 40, shown: true },
+    catalog: MIXED_CATALOG,
+    selection,
+    coverage: resolveSelection(selection, MIXED_CATALOG).providers,
+  })
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED]))
+  tree = await view.pump()
+  // The archive is off for this case, so the host answers as if the group were
+  // live-only — the mixed catalog only reaches the panel with the archive on, and
+  // that is asserted next.
+  check('смешанная группа нарисована одной строкой', treeParents(tree).length === 2, treeParents(tree).map(treeName).join(' | '))
+  check(
+    'и её счётчик — один на всю группу',
+    textOf(treeParent(tree, 'codex')).includes('1 из 3 моделей'),
+    textOf(treeParent(tree, 'codex')),
+  )
+
+  // With the archive on, the group spans both scopes: the click must write the same
+  // rule into both, and the next request must say so.
+  archiveCheck(tree).props.onChange({})
+  tree = await view.pump()
+  view.requests[1].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED]))
+  tree = await view.pump()
+  check(
+    'архивная половина появилась в дереве',
+    checkedModelsOf(tree, 'codex').length === 1 && treeRows(tree).length === 4,
+    checkedModelsOf(tree, 'codex').join(' | ') + ` (строк: ${treeRows(tree).length})`,
+  )
+
+  treeCheck(treeParent(tree, 'codex')).props.onChange({})
+  tree = await view.pump()
+  const written = view.requests[2]?.body?.selection ?? null
+  check(
+    'клик по группе пишет правило в обе половины',
+    written?.live?.providers?.codex === 'all' && written?.archive?.providers?.codex === 'all',
+    JSON.stringify(written),
+  )
+  view.requests[2].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED], view.requests[2].body.selection))
+  tree = await view.pump()
+  check(
+    'и группа после клика полная с обеих сторон',
+    textOf(treeParent(tree, 'codex')).includes('3 из 3 моделей'),
+    textOf(treeParent(tree, 'codex')),
+  )
+
+  // The next click reads the rule standing on the group, which is now in both
+  // scopes: a cleared group must come back as its measured models, not as "all".
+  treeCheck(treeParent(tree, 'codex')).props.onChange({})
+  tree = await view.pump()
+  view.requests[3].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED], view.requests[3].body.selection))
+  tree = await view.pump()
+  const cleared = view.requests[3]?.body?.selection ?? null
+  check('снятие группы пишет «ничего» в обе половины', cleared?.live?.providers?.codex === 'none' && cleared?.archive?.providers?.codex === 'none', JSON.stringify(cleared))
+}
+
+// --- a model's own row inside a mixed group ------------------------------------
+{
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED]))
+  tree = await view.pump()
+  archiveCheck(tree).props.onChange({})
+  tree = await view.pump()
+  view.requests[1].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED]))
+  tree = await view.pump()
+
+  const liveRow = modelCheck(tree, 'codex', 'gpt-6-mini')
+  check('у своей строки есть чем щёлкнуть', liveRow !== null && liveRow !== undefined)
+  liveRow?.props.onChange({})
+  tree = await view.pump()
+  const after = view.requests[2]?.body?.selection ?? null
+  check(
+    'отметка живой модели уходит в живую половину, а не в архивную',
+    after?.live?.pairs?.['codex\u0000gpt-6-mini'] === 'on' &&
+      after?.archive?.pairs?.['codex\u0000gpt-6-mini'] === undefined,
+    JSON.stringify(after),
+  )
+  view.requests[2].answer(mixedPayload([...byTtft.rows, MIXED_RETIRED], view.requests[2].body.selection))
+  tree = await view.pump()
+  check(
+    'и строка действительно отметилась',
+    checkedModelsOf(tree, 'codex').includes('codex/gpt-6-mini'),
+    checkedModelsOf(tree, 'codex').join(' | '),
+  )
 }
 
 // --- a host that cannot grade at all ------------------------------------------

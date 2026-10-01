@@ -775,6 +775,18 @@ run resolves it to `all`, so on such a provider it is the same set twice and the
 says so with a `data-state="measured"` and a tooltip rather than with a difference
 the reader cannot see.
 
+**A provider row is one decision, over both scopes when it spans both.** The tree
+draws one row per provider with one count — `1 из 3 моделей`, counted by the host over
+the whole group — and the click writes the same rule into every scope the group's
+models belong to. A provider that kept one model and retired another therefore gets
+the rule in `live` *and* in `archive`: writing it into one of them changed fewer rows
+than the checkbox promised, left the other half on whatever its own scope said, and
+started the next click's cycle from a rule the reader had not just set. A model's own
+checkbox resolves its scope from the model and not from the group, so ticking a live
+model of such a provider writes its exception where that model actually lives. While
+the archive is off the catalog holds no archived model at all, so a group a reader can
+see is a live group and the click touches `live` alone.
+
 Two scopes are one statement about two kinds of item: a model outside the
 configuration is not a model inside it, and a reader's marks about each are kept
 apart. While the archive is off its scope is stored and not applied, so switching
@@ -1469,7 +1481,7 @@ Counts as they stand on 2026-10-02, all seventeen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
-| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js` | 349 |
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: a provider group, and the bars its cells may promise | 358 |
 | `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
 | `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
@@ -1484,7 +1496,7 @@ Counts as they stand on 2026-10-02, all seventeen green (`exit=0`):
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 928 counted assertions in the fourteen tools that print a count; the other
+That is 937 counted assertions in the fourteen tools that print a count; the other
 three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
