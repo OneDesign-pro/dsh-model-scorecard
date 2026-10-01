@@ -5,13 +5,15 @@ folded from the session history the Harness already writes.
 
 The point is to answer one question with data instead of guesswork: **which of my
 configured models should I use for this task?** For every `(provider, model)`
-pair it reports how fast the model responds, how fast it decodes, how much work
-it did, and how often it failed.
+pair it reports one 0-100 technical rating, and the readings that rating is made
+of — how fast the model responds, how fast it decodes, how much work it did, and
+how often it failed.
 
 ## What it measures
 
 | Metric | Meaning |
 |---|---|
+| `rating` | the technical rating of one `(provider, model)` pair, 0-100: streaming throughput, median and p90 first token, with the weight of a measurement halving every 30 days from the pair's newest usable one. `~` = thin evidence, `*` = the newest usable measurement is over 30 days old — the marks never change the number (see *The rating*) |
 | `ttft` | time-to-first-token: `step/start` → first non-empty delta fragment. mean / median / min / max / p90 |
 | `ttft_clean` | the same median with the time a step spent on failed attempts and backoff removed |
 | `tps` | decode throughput in tokens/sec: the provider's own output-token count over the span it was streaming them |
@@ -208,6 +210,145 @@ pays 387 ms a step, `codex/gpt-5.6-sol` 220 ms, `clinebot/cline-pass/kimi-k3`
 over 16 037 corpus steps it is never negative, and a log that broke that
 assumption should show a negative number rather than have it hidden.
 
+### The rating: 0-100, and what it is not
+
+Every other column here is one reading, and the reader is left to weigh them.
+The rating is the one figure that weighs them: a single 0-100 number for one
+exact `(provider, model)` pair, computed from committed history alone — no
+clock, no I/O, no DSH import — and published under a version (`technical-v1`),
+so a later revision is a new formula rather than a silent drift of this one.
+
+```
+S = V50 / (V50 + 100)      generation throughput, half credit at 100 tok/s
+L = 1 / (1 + T50 / 5000)   typical response,        half credit at 5 s
+P = 1 / (1 + T90 / 15000)  slow response,           half credit at 15 s
+
+score = 100 * S^0.45 * L^0.35 * P^0.20
+```
+
+**The arithmetic, on this machine's largest row.**
+`deepseek-official/deepseek-flash` has 9946 answered steps across 84 sessions,
+of which 9501 qualify (95.5%; 11 retried and 9 interrupted steps are excluded,
+and those two counts may overlap — a step can be both). Its weighted medians
+are 289.0 tok/s, 1917 ms and a p90 of 2763 ms:
+
+```
+S = 289.01 / (289.01 + 100)  = 0.7429
+L = 1 / (1 + 1917 / 5000)    = 0.7229
+P = 1 / (1 + 2763 / 15000)   = 0.8445
+
+100 * 0.7429^0.45 * 0.7229^0.35 * 0.8445^0.20 = 75.4938   ->  75.5
+```
+
+Each factor is a saturating utility in (0, 1], so a route sitting on all three
+anchors scores exactly 50 and the product is monotonic: faster delivery with the
+rest held fixed can never lower the score. The weights and the anchors are
+product choices, not fitted constants — they decide what "good" means here — and
+they live in one frozen `RATING_POLICY` that the report quotes rather than
+restates, so a change to a weight changes the sentence under the table with it.
+
+**Throughput is the streaming rate, not `e2e`.** `e2e` contains the first-token
+wait, so scoring it would count that wait twice: once inside `T50` and again
+inside a deflated rate. And `P` is an absolute tail utility rather than a
+p90/p50 ratio, because a ratio rewards slowing an already-fast median — the
+table would then show a worse route above a better one.
+
+**The population is narrower than the table's.** A retried step measures the
+retry policy and the network as much as the route; an interrupted step never
+delivered a whole answer; a span flushed as one packet measures log packing. A
+step that cannot produce a rate does not get to contribute its latency either,
+so all three factors describe the same steps — a latency-only fallback when
+usage is missing would compare one route's ttft against another's under a shared
+score. The three floors (100 ms, 8 tokens, 4 fragments) are a single shared
+definition in `lib/eligibility.js`, re-exported by the fold, so the rating and
+the `tps` column cannot drift apart about which steps count.
+
+**Weight is recency, and there is no cutoff.** A measurement 30 days older than
+the pair's newest usable one counts half, 60 days a quarter, and older keeps
+decaying instead of disappearing — a fixed seven-day window was measured first
+and discards most pairs' evidence entirely. The anchor is that newest usable
+sample and never the wall clock, which is what keeps a score invariant when
+another model is used, a selection changes, or time passes with no new evidence.
+
+**What withholds a score, and what marks one.** Publication needs 10 qualified
+*and* 10 effective (Kish) samples. The two are separate thresholds on purpose:
+ten samples inside one pair of hours are worth less than ten spread out, and
+`nEffective` is what says so. A published score carries `~` while it is
+provisional — fewer than 30 effective samples, or fewer than 3 sessions. Four
+null reasons are data rather than sentences (`no_samples`,
+`no_qualified_samples`, `insufficient_samples`, `pair_only`), so each surface
+owns the wording, and the agent's report counts them in one bounded line
+(wrapped here to fit the page):
+
+```
+rating technical-v1 (0-100): 45% streaming throughput, 35% median first token,
+20% slow (p90) first token; weights halve every 30 days from the pair's newest
+usable step, retried and interrupted steps are excluded, and a score needs 10
+qualified and 10 effective samples. 10 of 10 shown row(s) rated; no score: none.
+provisional (5, marked ~: fewer than 30 effective samples or fewer than 3
+sessions): tokenator/deepseek-v4.1-flash, clinebot/cline-pass/minimax-m3, ...
+```
+
+**The quantiles are published beside a withheld score.** A reader asking why a
+route is unrated deserves to see that it was three samples of a fast route
+rather than silence: `clinebot/typesafe/jev-router` on this machine is
+`insufficient_samples` with 3 qualified samples, while its own weighted medians
+read 109.0 tok/s and 1993 ms.
+
+**`*` is a caveat, never a re-reading.** A score whose newest usable measurement
+is older than 30 days is marked `*` — in the cell, and named in the line under
+the table on the agent's side. Nothing is recomputed from the age, no bar is
+drawn against it, and no tone is applied: the number a reader compares is the
+number that was computed, and its age is a sentence about the evidence. Moving
+the display clock cannot change a score. On this machine's history the mark
+fires on no row at all — the oldest anchor is 11.5 days old, on
+`limitdeckai2/gemini-3.8-flash` — so today it is proven by fixtures and by a
+shifted clock rather than by a live row, and the first honest appearance will be
+when that pair crosses 30 days.
+
+Measured over the same corpus the report above came from (183 sessions /
+18 637 timed steps / 37 model rows over 13 providers; a cold fold and aggregate
+of it takes 113 ms): 25 rows carry a score, 10 are withheld for
+`insufficient_samples` and 2 for `no_qualified_samples`, and 8 of the 25 are
+provisional.
+
+| model | rating | steps | qualified / answered | rating sessions | what the cell says |
+|---|---|---|---|---|---|
+| tokenator/deepseek-v4.1-flash | **78.0~** | 15 | 14 / 15 | 1 | `~` — one session is under the 3-session floor |
+| deepseek-official/deepseek-flash | **75.5** | 9946 | 9501 / 9946 | 84 | — |
+| openrouter/stealth/space-bunny-alpha | **70.0** | 2371 | 1968 / 2371 | 20 | — |
+| limitdeckai2/glm-5.3-flash | **53.1~** | 648 | 21 / 648 (3.2%) | 8 | `~` — 3.2% of its steps qualify; 21.0 effective |
+| clinebot/typesafe/jev-router | — | 3 | 3 / 3 | 1 | no score: 3 of 10 qualified samples needed |
+
+Sorted by steps, the table leads with `deepseek-official/deepseek-flash` (9946
+answered steps) and `openrouter/stealth/space-bunny-alpha` (2371). Sorted by
+rating it leads with a 15-step session, and `limitdeckai2/glm-5.3-flash` falls to
+53.1 on 21 qualified steps. That disagreement is the reason the column exists,
+and the coverage column is what keeps it honest: of that route's 648 answered
+steps, 127 are retried and only 21 clear the span, token and fragment floors —
+the remaining 500 streamed too briefly, or too small, to be a rate at all.
+
+**What it is not.** Not intelligence, not correctness, not answer quality, not
+price, not context capacity, not current reachability. Each of those either has
+its own column or has no authoritative source in this release, and folding them
+in would make one number that means five different things. A failed liveness
+probe is deliberately *not* an input: VPN state is the reader's to control, so a
+route that cannot be reached right now keeps the score its history earned, and
+the status column is where "right now" is answered. The disclosure under each
+row ends with the same caution the rest of this file keeps making — measurements
+depend on request size, reasoning mode and network, and the absence of retries
+does not prove the absence of network delay.
+
+**What does and does not move a score.** Adding an unrelated provider or model,
+changing the selected pairs, filtering by provider, and moving the display clock
+all leave it exactly where it was. So does everything about liveness, retry
+failures, tool errors, cache hit rate and observed context. Adding a newer
+*eligible* measurement does move it; adding a newer excluded one — retried,
+interrupted, or a span below the floors — does not, and neither does a score's
+own age. The same pair produces the same figure through a cold fold, a hydrated
+snapshot, a selection and a `sinceMs`-scoped report, and that is asserted rather
+than assumed.
+
 ## Where to find it
 
 Two surfaces, one collector, so they can never disagree:
@@ -220,7 +361,7 @@ Two surfaces, one collector, so they can never disagree:
    move: the Settings dialog this panel used to be a section of is a narrow
    overlay, and a table of `white-space: nowrap` numbers had no width to stand
    in. The table is bounded and scrolls both ways inside its wrapper, under a
-   header pinned to the top and a name column pinned to the left: at ten
+   header pinned to the top and a name column pinned to the left: at twenty-one
    `nowrap` columns a row's identity is the first thing to leave the screen, and
    a table of numbers that no longer says whose numbers they are is not one to
    sort. The table itself is unchanged — a sortable row per model (or provider),
@@ -234,17 +375,44 @@ Two surfaces, one collector, so they can never disagree:
    cell a reader acts on, the one column that is always shown, and the one
    heading that orders by a verdict rather than by a figure — click it and the
    rows come back by what is broken, at the bottom of the table (see *Is the
-   model answering now*). By default the
-   table then shows steps, median response time, median end-to-end throughput
-   (`tok/s e2e med`, including the first-token wait), and errors per 100 steps.
-   Streaming throughput and absolute errors remain behind «все метрики»:
-   the former omits startup latency, the latter grows with usage. Errors per
-   100 steps normalize activity, not task difficulty or blame; this is not a
-   model-quality score. The expanded order groups identity and availability,
-   sample size and recency, response latency and retries, throughput and its
-   measurement coverage, errors and interruptions, then duration and input
-   diagnostics. Thin dividers mark the groups without another sticky header.
-   Under the three rate medians — response, `tok/s e2e med` and `ош./100` — every
+   model answering now*). The **рейтинг** column stands third, next to the status
+   it pairs with: those two are the whole answer to "which of these should I
+   use", and every other figure in the row is the evidence behind them. By
+   default the table is six columns wide — name, status, rating, steps, median
+   response time and median end-to-end throughput (`tok/s e2e med`, including
+   the first-token wait) — and it was six before the rating existed: `ош./100`
+   moved behind «все метрики» to pay for it, because a rate of errors per 100
+   steps is a diagnostic to consult, while a score that already folds throughput
+   and latency together is what a route is picked by. Streaming throughput,
+   absolute errors and the rest of the twenty-one columns stay one click away.
+   Errors per 100 steps normalize activity, not task difficulty or blame, and
+   neither they nor the rating measure answer quality.
+
+   The rating is drawn with one decimal, **no bar and no tone**. A bar is a
+   share of the largest value in its column, and this figure is already 0-100 on
+   its own scale, so a bar would say "best of five" where the number says
+   something else; green and red in this panel mean "best and worst value in the
+   table", and a rating may not be graded by the company it keeps. A `~` or a `*`
+   rides in the cell after the number (see *The rating*), and the cell's tooltip
+   and its screen-reader sentence are one string — which is how a `-`, standing
+   for four different reasons, stays readable without a mouse.
+
+   In the expanded set every name cell carries one disclosure, **Подробнее**:
+   what the score is made of — version, qualified and effective samples, both
+   exclusion counts, sessions, the age of the anchor, the three measured inputs
+   and the three factors — then what the route declares about itself (see *What
+   the route declares* below), and a closing caution. It is a native `<details>`
+   rather than a popover, because this is the explanation of the one figure in
+   the row that is a verdict and the browser gives a `<summary>` keyboard access
+   for free; it is drawn only in the expanded set and only in the model view,
+   since the compact table is one line per row and a disclosure under every name
+   would spend that line on rows nobody asked about. The expanded order groups
+   identity and availability, sample size and recency, response latency and
+   retries, throughput and its measurement coverage, errors and interruptions,
+   then duration and input diagnostics. Thin dividers mark the groups without
+   another sticky header.
+   Under the three rate medians — response, `tok/s e2e med` and `ош./100`, all
+   three of them in the expanded set now — every
    figure carries a hairline bar: its share of the largest value in that column, so
    a column can be read down the page without reading the digits. Which columns are
    scaled is the `SCALED` map in `client.js`: a cell draws a bar only for a metric
@@ -479,6 +647,70 @@ OK     nvidia1            z-ai/glm-5.3-flash           130863  llm
 OK     openrouter         google/gemini-3.8-flash      1501    llm
 FAIL   openrouter         google/gemma-4-31b-it:free   526     llm  RATE_LIMIT 429: Rate limit exceeded: free-models-per-day
 ```
+
+### What the route declares
+
+The rating answers how fast a pair has been. A reader deciding what to run next
+also wants what the route *declares* about itself: its context window, the
+output cap it applies by default, the input modalities it accepts and the
+reasoning modes it offers. DSH exposes exactly one call that reads that, and it
+validates and detaches the adapter's answer before returning it —
+`ctx.llm.resolveModelInfo(provider, model, signal)`.
+
+It is shown in the **Подробнее** disclosure of the expanded set (see *Where to
+find it*), one line per row, and only these fields ever reach a row:
+
+| Field | What the adapter declares |
+|---|---|
+| `contextWindow` | the model's context window |
+| `defaultMaxTokens` | the **default** output cap a request gets when it names none — *not* a maximum capacity: the model may emit more under an explicit cap, and the field name carries that distinction to every consumer |
+| `inputModalities` | what the route accepts (text, image, …) |
+| `reasoningEfforts` + `defaultReasoningEffort` | the reasoning modes on offer, with the one a request that names none gets named beside them |
+| `source`, `checkedAt` | `dsh-adapter`, and when it was asked |
+
+**Two unknowns are kept apart.** `routeMetadata: null` means DSH was not asked
+or did not answer — no adapter for the provider, no `resolveModelInfo` on an
+older runtime, a throw, a budget spent. An object full of nulls means the
+adapter answered and declares nothing about that field. Inside that line a
+missing field is printed as *«не объявлено»* and not as the panel's `-`,
+because the line makes a claim about the route ("it declares") and a dash
+inside it would read as the other fact — *we did not look*. A context window of
+0 is not a small window; it is not a window, which is why the unknown is `null`
+and never a zero.
+
+**Every lookup is bounded,** because the panel's own fold budget is 2.5 s and
+this is decoration: 1 h for a positive answer (a context window is a property of
+the adapter's configuration, not of a request) and 5 min for a negative one (a
+failure is usually a route this install does not serve, and retrying it on every
+refresh is wasted work), 1 s per lookup and 1 s per enrichment, four at a time,
+and at most 64 *new* pairs per answer. Past that cap the pairs already asked
+about stay cached, so a page wider than 64 fills in over successive refreshes
+instead of queueing an unbounded sweep onto one request. Two rows naming the
+same pair share one lookup, a late answer cannot overwrite a newer one, and a
+pre-aborted `AbortSignal` is only a courtesy — an adapter that ignores
+cancellation is a route the panel must not wait on, so the timeout is a local
+race.
+
+**This is a configuration read, not a request.** Nothing here probes, and
+nothing here infers: the two layers are separate on purpose, because folding a
+lookup into a probe (or the reverse) would make one out of the other. A route
+may well declare a million-token window and be unreachable from this machine
+because a VPN is off — the status column is where *right now* is answered, and
+it costs one real request. The rating is computed before rows are cut and the
+caller enriches after it, so a route whose metadata is unknown still has its
+score, and a route that answers a probe badly keeps the score its history
+earned.
+
+Measured on the installed runtime (2026-09-30, profile `web`, 75 configured
+pairs, ~0 ms per call, no network), `resolveModelInfo` answered for all 75:
+`contextWindow` and `inputModalities` on every one, `defaultMaxTokens` on 36,
+`reasoning` on 31, `name` on every one and `description` on none. Everything
+outside the table above is dropped at the boundary — `name`, `description` and
+whatever an adapter keeps beside them — because this object is serialized to a
+browser and only the display fields belong in it; the identity check is
+repeated there too, since a context window is only meaningful for the route it
+was declared for. The optional half being the common case is the whole reason a
+missing field has to read as unknown rather than as a zero.
 
 ### Filtering by provider
 
@@ -836,14 +1068,17 @@ anything else, including its absence, is the default of hiding the archive and o
 50-row page) stays exactly as it was, for any client that predates the selection.
 The panel always names `limit=200` because its table is the configured set and not
 only the history: see *Models the configuration serves and the history has not
-seen*. Both routes accept every column key of the table (`steps`, `ttft`, `speed`,
-`errors`, `lastSeen`, `name`, `ttftP90`, `tpsMax`, `confidence`, `llm`, `cache`,
-`retry`, `ttftClean`, `e2e`, `prefill`, `overhead`, `errorRate`, `modelErrors`,
-`interrupted`, `liveness`), while the agent tool `model_stats` continues to use
-its curated five-order enum. An order nobody knows falls back to `steps` rather
-than failing the request, and the answer echoes the order it really applied — the
-panel draws its arrow from that echo, so a host that predates a column cannot end
-up with a heading claiming an order its rows are not in.
+seen*. Both routes accept every column key of the table (`rating`, `steps`,
+`ttft`, `speed`, `errors`, `lastSeen`, `name`, `ttftP90`, `tpsMax`,
+`confidence`, `llm`, `cache`, `retry`, `ttftClean`, `e2e`, `prefill`,
+`overhead`, `errorRate`, `modelErrors`, `interrupted`, `liveness`), while the
+agent tool `model_stats` uses its curated six-order enum — the five it always
+had plus `rating`, with `steps` still the default. An order nobody knows falls
+back to `steps` rather than failing the request, and the answer echoes the order
+it really applied — the panel draws its arrow from that echo, so a host that
+predates a column cannot end up with a heading claiming an order its rows are
+not in. A rating with no score is not a zero: under either direction the
+unrated rows stay at the bottom, in the order every other missing figure uses.
 
 Four fields of the answer exist for the selection:
 
@@ -1011,6 +1246,7 @@ it* above).
 model_stats(sort: "ttft")            # fastest median first token
 model_stats(sort: "speed")           # fastest median decode
 model_stats(sort: "errors")          # least stable first
+model_stats(sort: "rating")          # the 0-100 technical rating, best first
 model_stats(view: "provider")        # one row per provider, all its models folded together
 model_stats(provider: "openrouter,codex")   # these providers only
 model_stats(provider: ["openrouter"], sinceMs: <epoch-ms>)
@@ -1038,6 +1274,15 @@ the fastest decode, and every model that produced errors.
   the fastest model **of the filtered set**, not of the whole history. The
   unfiltered set counts, not the page the limit cut off, so raising `limit` never
   changes which model is the fastest.
+- `sort: "rating"` orders by the technical score and puts the unrated rows at
+  the bottom in both directions, like every other missing figure. The `~` and `*`
+  marks ride in the cell, and the line under the table names both what they
+  mean and which rows carry them; a `-` is one of four reasons, counted in that
+  same line (`no_samples`, `no_qualified_samples`, `insufficient_samples`,
+  `pair_only`).
+- The rating is not answer quality, not price and not reachability, and a `*`
+  on it does not lower it: the mark says the evidence is old, and the number is
+  the number its history earned (see *The rating*).
 - A model that is not in the current configuration is not printed: the archive is
   off by default, so the table names models you can run. It is not silence — one
   `archive:` line reports how many rows and steps were left out, and says that
@@ -1066,6 +1311,9 @@ Or through the plugin manager, pointing `install_bundle` at this directory.
 ## Verification
 
 ```bash
+node tools/verify-rating.mjs    # the formula: the anchors, the weights, the population gate, the nulls
+node tools/verify-rating-paths.mjs  # one pair, one score: cold fold, snapshot, selection and sinceMs agree; the marks match the panel's
+node tools/verify-metadata.mjs  # route metadata: bounded, cached, unknown is null, and no probe behind it
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last, per-column keys, direction, the status order
 node tools/verify-provider-filter.mjs  # the provider filter: one reading of it everywhere
@@ -1074,12 +1322,46 @@ node tools/verify-configured-rows.mjs  # rows built from the configuration: what
 node tools/verify-panel-state.mjs # panel: a query switch never takes the rows off the screen, what the status circle may claim, and what it may not
 node tools/verify-liveness.mjs   # liveness against the real LLM stack: a probe reaches a provider and reports what it found
 node tools/verify-probe-budget.mjs  # the probe's deadline: the route's own declaration, else the host's default
+node tools/verify-probe-shape.mjs   # the probe's shape and scope: through ctx.llm, and the pairs a reader named
 node tools/harness-real.mjs      # the same collector driven against this machine's real store
 node tools/verify-official.mjs   # field-by-field cross-check against sessionStats
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model
 node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragments
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
+
+Counts as they stand on 2026-10-01, all fifteen green (`exit=0`):
+
+| tool | what it counts | checks |
+|---|---|---|
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js` | 338 |
+| `verify-selection.mjs` | rules, catalog, and an independent recomputation of the aggregate | 122 |
+| `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
+| `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
+| `verify-metadata.mjs` | bounded lookups, TTL, dedup, disposal, the whitelist | 60 |
+| `verify-provider-filter.mjs` | one reading of the filter on every surface | 58 |
+| `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
+| `verify-configured-rows.mjs` | what a pair with no history is | 31 |
+| `verify-budget.mjs` | the collection contract | 26 |
+| `verify-liveness.mjs` | the catalog join and the state classification | 20 |
+| `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
+| `verify-probe-budget.mjs` | the deadline rule | 12 |
+
+That is 869 counted assertions in the twelve tools that print a count; the other
+three assert by exhaustive comparison instead — `verify-official.mjs` field by
+field against the official projection, `verify-retry.mjs` over every retry event
+in the corpus, and `verify-tokens-per-fragment.mjs` over 21 576 folded steps of
+20 models. `verify-retry.mjs` reads a real corpus and takes its path as its first
+argument, defaulting to `/tmp/dshcorpus` (183 sessions here) — a missing corpus
+is an inability to run, never a pass.
+
+Two of the rating's properties can only be tested with a frozen clock, and both
+are pinned on the two surfaces rather than asserted once. The panel test mounts
+`client.js` with an injected `Date.now()` and requires `61,0` at exactly one
+half-life and `61,0 *` one millisecond later; the report test does the same
+against the text report and the panel's cell side by side. Flipping either `>`
+to `>=` fails exactly one check and nothing else, which is the evidence that the
+assertion is aimed at that comparison and not at the code around it.
 
 `harness-real.mjs` mounts the shipped `session-persistence-jsonl` and
 `session-query` plugins the way the composition does, so the numbers it prints
