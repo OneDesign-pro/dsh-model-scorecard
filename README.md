@@ -445,7 +445,11 @@ Two surfaces, one collector, so they can never disagree:
    Every column heading
    explains its own figure on hover, and carries the same sentence as hidden text
    so it reaches a screen reader too; the legend that spells all of this out sits
-   folded under the table. The last answer is kept in the browser, so reopening
+   folded under the table. Its first half is read whichever columns are open: the
+   rating's `~` and `*` are defined there, out of the very two dictionary keys the
+   cell's own tooltip prints, because the rating is one of the six compact columns
+   and a glyph the table prints must not be one the legend defines only behind a
+   button the reader never pressed. The last answer is kept in the browser, so reopening
    the panel paints the table first and refreshes behind it, and the chosen sort,
    direction, view, selected models, archive and column set are remembered — in
    `localStorage`, not in the address (see *The question the panel asks* below).
@@ -1452,7 +1456,7 @@ Counts as they stand on 2026-10-01, all sixteen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
-| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js` | 341 |
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js` | 349 |
 | `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
 | `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
@@ -1466,7 +1470,7 @@ Counts as they stand on 2026-10-01, all sixteen green (`exit=0`):
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
 | `verify-probe-budget.mjs` | the deadline rule | 12 |
 
-That is 912 counted assertions in the fourteen tools that print a count; the other
+That is 920 counted assertions in the fourteen tools that print a count; the other
 three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of

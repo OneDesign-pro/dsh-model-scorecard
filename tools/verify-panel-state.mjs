@@ -266,6 +266,23 @@ const rowLabels = (tree) => {
 const buttonWithText = (tree, label) =>
   nodesWhere(tree, (node) => node.type === 'button' && textOf(node).includes(label))[0]
 
+/** The legend's own paragraph, the three halves as a reader receives them. */
+const legendText = (tree) =>
+  textOf(nodesWhere(tree, (node) => node.props?.className === 'dsh-ms-note')[0])
+
+/** One cell as a node, for a check that needs its props and not only its text. */
+const cellNode = (tree, key, index = 0) => {
+  const head = nodesWhere(tree, (node) => node.type === 'thead')[0]
+  const heading = (head?.props.children ?? []).flatMap((row) => row?.props?.children ?? [])
+  const column = heading.findIndex((cell) => cell?.props?.key === key)
+  if (column === -1) return null
+  return bodyRows(tree)[index]?.props.children[column] ?? null
+}
+
+/** The `title` a cell offers on hover, which is where a rating's marks are spelled out. */
+const cellTitle = (tree, key, index = 0) =>
+  String(cellNode(tree, key, index)?.props.children?.[0]?.props?.title ?? '')
+
 // --- sorting by a column heading ----------------------------------------------
 
 /** The heading cell of one column, found by the key that column declares. */
@@ -1208,6 +1225,70 @@ function barsOf(tree, key) {
   const body = text(tree)
   check('и «Подробнее» — «Details»', body.includes('Details'), body.slice(0, 80))
   check('с английскими словами о маршруте и цене', body.includes('default output cap: 4,096') && body.includes('price and quotas: unknown'))
+}
+
+// --- легенда называет то, что печатает таблица --------------------------------
+//
+// Рейтинг — один из шести столбцов краткого набора (`CORE_COLUMNS`), и его клетка
+// печатает `~` и `*` рядом с числом. Определения этих двух знаков жили в
+// `note.extra` — в той половине легенды, которая читается только с открытыми «все
+// метрики», — так что читатель, который эту кнопку ни разу не нажал, видел в
+// столбце, с которого таблица начинается, два знака и не встречал ни одного из
+// них в легенде. Теперь легенда собирает эту фразу из тех же двух ключей
+// словаря, что печатает подсказка самой клетки, и проверяется поэтому на
+// тождество, а не на пересказ: половина легенды и есть подсказка.
+//
+// Три утверждения на язык, и краткий набор проверяется первым: именно его
+// половина читается всегда.
+{
+  const marked = row('codex', 'gpt-6-astra', {
+    steps: 12, ttftMedian: 3500,
+    rating: {
+      version: 'technical-v1', score: 64.2, reason: null, provisional: true,
+      // 40 дней назад: старше 30, значит `*` печатается вместе с `~`, и у клетки
+      // есть обе фразы, с которыми сравнивается легенда.
+      anchor: Date.now() - 40 * 24 * 60 * 60 * 1000,
+      qualifiedSamples: 11, answeredSamples: 12, excludedRetried: 1, excludedInterrupted: 0,
+      effectiveSamples: 10.5, sessions: 2, coverage: 11 / 12,
+      inputs: { tpsMedian: 38, ttftMedianMs: 3500, ttftP90Ms: 9000 },
+      components: { throughput: 0.3, latency: 0.6, tailLatency: 0.6 },
+    },
+  })
+  const data = payload('rating', [marked], { providerList: PROVIDER_LIST })
+  const cache = { [cacheKey('rating', 'desc', 'model')]: { at: Date.now(), data } }
+  // Легенда свёрнута `hidden`, пока её не попросили, и `legendText` читает ровно то,
+  // что читатель получает, нажав «Как читать таблицу».
+  const mount = (columnsAll, locale = null) =>
+    mountPanel({ entries: cache, prefs: { columnsAll, sort: 'rating', dir: 'desc' }, locale }).render()
+
+  for (const [language, locale, defines] of [
+    ['ru', null, 'техническая оценка пары'],
+    ['en', 'en', 'technical score'],
+  ]) {
+    const tree = mount(false, locale)
+    // Подсказка клетки — это «{счёт} · {~} · {*}», и последние две части и есть
+    // определения знаков на этом языке: сравнивать легенду надо с ними, а не с их
+    // копией здесь, — иначе проверка прошла бы, разойдясь с подсказкой.
+    const sentences = cellTitle(tree, 'rating').split(' · ').slice(1)
+    const compact = legendText(tree)
+    const expanded = legendText(mount(true, locale))
+    check(`${language}: у клетки рейтинга обе фразы знаков в подсказке`, sentences.length === 2, sentences.join(' | '))
+    check(
+      `${language}: краткая легенда называет оба знака`,
+      compact.includes('~') && compact.includes('*') && sentences.every((sentence) => compact.includes(sentence)),
+      compact.slice(-260),
+    )
+    check(
+      `${language}: и расширенная легенда — теми же фразами`,
+      sentences.every((sentence) => expanded.includes(sentence)),
+      expanded.slice(-260),
+    )
+    check(
+      `${language}: краткая легенда объясняет сам столбец рейтинга`,
+      compact.includes(defines),
+      compact.slice(-260),
+    )
+  }
 }
 
 // --- полоска под числом ------------------------------------------------------

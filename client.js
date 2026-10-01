@@ -311,10 +311,19 @@ window.__ModuleLoader__.load({
         'footer.archive': 'в архиве: {count}',
         'footer.noStats': 'без статистики: {count}',
         'legend.summary': 'Как читать таблицу',
+        // The legend is three halves, and only the third one depends on which
+        // columns are open. `note.core` is the rule; the two marks the rating cell
+        // prints are appended to it at render time out of the same keys the cell's
+        // own tooltip uses (`markLegend`), because that cell is a compact column;
+        // and `note.extra` or `note.collapsed` is what the expanded set adds or
+        // hides. Nothing here names a column that may be behind the button — a
+        // legend that describes a column the reader cannot see is the mistake
+        // this file used to make, once with the marks and once with the scale
+        // columns.
         'note.core':
-          'Зелёным отмечены лучшие медианы, красным — худшие среди показанных строк. Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. Наведите курсор на заголовок столбца, чтобы прочитать, что он измеряет. Заголовок — кнопка сортировки: щёлкните, чтобы упорядочить строки по нему, ещё раз — чтобы развернуть порядок. Под столбцами со шкалой — отклик, tok/s med, tok/s e2e med и ош./100 — нарисована полоска: доля значения от наибольшего в этом столбце. ',
+          'Зелёным отмечены лучшие медианы, красным — худшие среди показанных строк. Значение «-» означает, что провайдер не записал тайминги потока для этой модели, а не что она медленная. Наведите курсор на заголовок столбца, чтобы прочитать, что он измеряет. Заголовок — кнопка сортировки: щёлкните, чтобы упорядочить строки по нему, ещё раз — чтобы развернуть порядок. Под столбцами, которые несут шкалу, нарисована полоска: доля значения от наибольшего в этом столбце. «рейтинг» — техническая оценка пары, 0–100; курсор на числе покажет, по скольким замерам он посчитан. ',
         'note.extra':
-          '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. «кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала. «рейтинг» — техническая оценка пары: курсор на числе покажет, по скольким замерам он посчитан, а «Подробнее» под названием модели — из чего он сложился и что маршрут объявляет о себе: контекст, лимит ответа по умолчанию, вход и reasoning. «~» рядом с числом — выборка мала, «*» — последний подходящий замер старше 30 дней; то и другое объяснено в подсказке к числу.',
+          '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. «кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала. Под «Подробнее» под названием модели — из чего сложился рейтинг и что маршрут объявляет о себе: контекст, лимит ответа по умолчанию, вход и reasoning.',
         'note.collapsed':
           'Отклик p90, tok/s max, «замер», llm / шаг, «кэш», «виден» и ош./100 — за кнопкой «все метрики»; там же под названием модели появляется «Подробнее»: из чего сложился рейтинг и что маршрут объявляет о себе.',
       },
@@ -524,9 +533,9 @@ window.__ModuleLoader__.load({
         'footer.noStats': 'without statistics: {count}',
         'legend.summary': 'How to read the table',
         'note.core':
-          'Green marks the best medians, red the worst among the rows shown. A “-” means the provider recorded no stream timing for that model, not that the model is slow. Hover a column heading to read what it measures. A heading is a sort control: click it to order the rows by that column, click it again to reverse the order. Under the columns that carry a scale — response, tok/s med, tok/s e2e med and err/100 — there is a bar: that value’s share of the largest one in the column. ',
+          'Green marks the best medians, red the worst among the rows shown. A “-” means the provider recorded no stream timing for that model, not that the model is slow. Hover a column heading to read what it measures. A heading is a sort control: click it to order the rows by that column, click it again to reverse the order. Under the columns that carry a scale there is a bar: that value’s share of the largest one in the column. “rating” is the pair’s technical score, 0–100; hover the figure to read how many measurements stand behind it. ',
         'note.extra':
-          '“meas.” is the share of steps whose span was long enough to be a reliable rate: a low value means the model mostly emitted very short bursts, so its tok/s is the least trustworthy number in the row. “cache” is the prompt-cache read share of input tokens. “seen” is when the model last answered. “rating” is the pair’s technical score: a hover on the figure says how many measurements stand behind it, and the “Details” block under the model name says what it is made of and what the route declares about itself — context, default output cap, input and reasoning. “~” beside the figure means thin evidence and “*” that the newest usable measurement is over 30 days old; the figure’s own tooltip explains both.',
+          '“meas.” is the share of steps whose span was long enough to be a reliable rate: a low value means the model mostly emitted very short bursts, so its tok/s is the least trustworthy number in the row. “cache” is the prompt-cache read share of input tokens. “seen” is when the model last answered. The “Details” block under the model name says what the rating is made of and what the route declares about itself — context, default output cap, input and reasoning.',
         'note.collapsed':
           'Response p90, tok/s max, “meas.”, llm / step, “cache”, “seen” and err/100 — behind the “all metrics” button; there the model name also gains a “Details” block: what the rating is made of and what the route declares about itself.',
       },
@@ -1996,6 +2005,21 @@ window.__ModuleLoader__.load({
         marks.push({ key: 'stale', glyph: '*', text: 'rating.stale' })
       }
       return marks
+    }
+
+    /**
+     * The same two marks, as the legend's one sentence.
+     *
+     * Composed from the keys {@link ratingMarks} hands the cell's tooltip and its
+     * hidden text, so a glyph's meaning exists once in this panel: the legend used
+     * to paraphrase it in `note.extra`, and two copies of the same caveat drift
+     * apart the first time one of them is edited. The sentence is appended to
+     * `note.core` rather than to the expanded half because the rating is one of the
+     * six compact columns — a reader who never presses «все метрики» still sees
+     * `~` and `*` in the cell.
+     */
+    function markLegend(t) {
+      return `~ — ${t('rating.provisional')}. * — ${t('rating.stale')}. `
     }
 
     /**
@@ -4126,7 +4150,11 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dsh-ms-note', hidden: !showLegend },
-            t('note.core') + (showAllColumns ? t('note.extra') : t('note.collapsed')),
+            // The first two halves are read whatever columns are open; the third
+            // is the only one that changes. The rating's marks are in the first,
+            // so the table never prints a glyph the legend has not named — and the
+            // legend never describes a column the table is not showing.
+            t('note.core') + markLegend(t) + (showAllColumns ? t('note.extra') : t('note.collapsed')),
           ),
         ),
       )
