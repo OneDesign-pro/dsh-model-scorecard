@@ -1,7 +1,10 @@
-# dsh-model-stats
+# dsh-model-scorecard
 
-Historical per-model and per-provider performance analytics for DeepSeek Harness,
-folded from the session history the Harness already writes.
+A scorecard for every configured `(provider, model)` route in DeepSeek Harness,
+built from three sources that cannot be confused with one another: the session
+history the Harness already writes, the metadata each adapter declares about its
+own route, and — only when someone asks — one live request through `ctx.llm` to
+see whether that route answers right now.
 
 The point is to answer one question with data instead of guesswork: **which of my
 configured models should I use for this task?** For every `(provider, model)`
@@ -314,9 +317,14 @@ fires on no row at all — the oldest anchor is 11.5 days old, on
 shifted clock rather than by a live row, and the first honest appearance will be
 when that pair crosses 30 days.
 
-Measured over the same corpus the report above came from (183 sessions /
-18 637 timed steps / 37 model rows over 13 providers; a cold fold and aggregate
-of it takes 113 ms): 25 rows carry a score, 10 are withheld for
+Measured over the same corpus the report above came from (183 session logs read,
+of which 174 carry a timed step, 18 637 timed steps, 37 model rows over 13
+providers; a cold fold and aggregate of the whole corpus takes 87 ms — median of
+five fresh processes, and 78 ms for the same measurement before the rating
+existed. The rating itself is 6.7 ms of that, measured alone over the same
+18 637 samples in 37 pairs; the rest is the fold's eligibility pass and the
+panel payload carrying the new object (45.0 KB → 65.2 KB of JSON)): 25 rows
+carry a score, 10 are withheld for
 `insufficient_samples` and 2 for `no_qualified_samples`, and 8 of the 25 are
 provisional.
 
@@ -361,7 +369,7 @@ than assumed.
 
 Two surfaces, one collector, so they can never disagree:
 
-1. **Plugins → the `dsh-model-stats` bundle** — the visual panel, on the bundle's
+1. **Plugins → the `dsh-model-scorecard` bundle** — the visual panel, on the bundle's
    own page in the Plugins section, between its description and its rows. It is
    registered in the `plugins.bundle.config` slot that page declares, keyed by
    the bundle's package name, so the page draws the title, the icon and the crumb
@@ -614,7 +622,7 @@ are drawn from, so the button and the marks cannot disagree — and it is disabl
 while nothing is ticked. It travels as the pairs themselves rather than as the rule
 document, because a check is a question about models that exist: the host probes a
 named pair whether or not the catalog still lists it, and answers `NO_ROUTE` rather
-than dropping it, which would look like a green row. `POST /api/model-stats/liveness/check`
+than dropping it, which would look like a green row. `POST /api/model-scorecard/liveness/check`
 takes `pairs: [{ provider, model }]` for that, capped at 1024 pairs, and keeps
 `provider` / `model` / `all` for the agent's own tool.
 
@@ -983,7 +991,7 @@ never about a figure: every number the tool prints comes from the same fold the
 panel's rows do.
 
 The panel follows the GUI's language. Its copy ships as `ru` and `en`
-dictionaries registered under the `dsh-model-stats` locale namespace, so the
+dictionaries registered under the `dsh-model-scorecard` locale namespace, so the
 Settings language switcher (and any language pack) applies to it, including the
 panel's own heading and the number and date formats. On a host without the
 `locale` client service the panel falls back to its built-in Russian copy. The
@@ -1018,7 +1026,7 @@ own: `@deepseek-ai/dsh-client-ui-plugin-manager` is listed in `dsh.client.inject
 in `package.json`, so that page's browser half arrives first, and
 `ctx.slots.inject('plugins.bundle.config', …)` waits for the page to declare the
 slot rather than racing its boot. The key it registers under is the bundle's
-package name, `dsh-model-stats` — the same name the profile installed — and the
+package name, `dsh-model-scorecard` — the same name the profile installed — and the
 page renders the entry only while the bundle is on, so switching the bundle off
 takes the table with it.
 
@@ -1033,7 +1041,7 @@ rule document in a query string is either truncated or spelled out in a place th
 host's page can read. Rather than have one surface remember half its question in
 one place and half in another, the whole question moved into the store: the sort,
 the direction, the view, the archive and the rules are one document under one
-versioned key, `dsh-model-stats:prefs:v2.selection`. Every parameter of the host's
+versioned key, `dsh-model-scorecard:prefs:v2.selection`. Every parameter of the host's
 page is left exactly as it was found — the panel never writes the address at all,
 and a leftover `msSort` in a bookmark is ignored rather than half-honoured.
 
@@ -1048,7 +1056,7 @@ everyone who never touched that control. A store the browser refuses (a locked-d
 profile) is not a reason to lose the panel: the selection lives in memory for the
 tab, and the panel says so beside the count.
 
-The panel's data comes from `POST /api/model-stats/query` on the same host as the
+The panel's data comes from `POST /api/model-scorecard/query` on the same host as the
 GUI, with a JSON body:
 
 ```json
@@ -1069,7 +1077,7 @@ malformed selection, a body over one megabyte or a method other than `POST` is
 host that half-reads a selection answers a question nobody asked, and the panel
 draws that answer under the reader's own controls.
 
-`GET /api/model-stats` (`?sort=&dir=&view=&provider=&archived=&limit=`, where `dir`
+`GET /api/model-scorecard` (`?sort=&dir=&view=&provider=&archived=&limit=`, where `dir`
 is `asc` or `desc`, `provider` is a comma-separated list and may also be repeated,
 `archived=1` asks for the archive and `limit` bounds the page at 200 rows —
 anything else, including its absence, is the default of hiding the archive and of a
@@ -1117,13 +1125,28 @@ Opening the panel is answered in three phases, cheapest first, so the table is
 never held behind a cold fold:
 
 1. **The in-memory fold.** This process already folded the corpus, so the route
-   answers from memory in milliseconds without touching the store.
+   answers from memory in milliseconds without touching the store. It answers only
+   from sessions *this* process folded — a snapshot loaded from disk is phase 2's
+   business, and letting phase 1 serve it unchecked is how a table missing every
+   session written since the last fold became the fast answer.
 2. **The on-disk snapshot.** A fold written by an earlier process is validated
    against **one** corpus listing — revisions only, no log is read — and unchanged
-   logs are served from it as they are.
-3. **The folding pass.** Whatever the snapshot could not cover is read, bounded.
-   One listing decides for every session whether its snapshot entry may be reused,
-   so a repeat pass reads nothing at all, and a changed log is the only log read.
+   logs are served from it as they are. A snapshot that cannot vouch for every
+   session still answers with the ones it can, names the rest, and hands their ids
+   to the next phase.
+3. **The folding pass.** Exactly those sessions are read, bounded, reusing the
+   listing phase 2 already made. One listing decides for every session whether its
+   snapshot entry may be reused, so a repeat pass reads nothing at all, and a
+   changed log is the only log read.
+
+What counts as "changed" is one log's own file identity — `dev:ino:size:mtime:ctime`
+— and nothing else. Older log generations also carry a corpus-wide hash behind it,
+computed over *every* old-format log on the machine, so it moves as soon as any one
+of them is written; measured against this machine's store on 2026-10-01, comparing
+whole revisions made **195 of 483 sessions** read as changed while not one of their
+own logs had been written, and the hash moved again between two measurements taken
+minutes apart. That hash is stripped on the way in, which is why a snapshot written
+before this rule existed still hydrates into the same keys.
 
 - One background warm pass folds the whole corpus right after activation and then
   writes the snapshot. Nothing runs on a timer, and the panel never polls — the
@@ -1141,29 +1164,45 @@ never held behind a cold fold:
   failure is contained and reported as a skipped session.
 - Zero runtime dependencies, import-free host half apart from this package's own modules.
 
-The snapshot lives in `~/.dsh/cache/dsh-model-stats/fold-snapshot.json`
-(override with `DSH_MODEL_STATS_CACHE_DIR`). It holds folded samples only — never
+The snapshot lives in `~/.dsh/cache/dsh-model-scorecard/fold-snapshot.json`
+(override with `DSH_MODEL_SCORE_CARD_CACHE_DIR`). It holds folded samples only — never
 events — and is replaced atomically, so a crash mid-write cannot leave a half
 snapshot behind.
 
 Measured with `tools/harness-real.mjs` against this machine's real store
-(**374 sessions / 21 645 timed steps / 62 model identities**, ~22 % of logs still
-in the legacy v3 format):
+(**483 sessions / 34 586 steps / 70 model identities**, ~22 % of logs still in the
+legacy v3 format), on 2026-10-01:
 
 | | |
 |---|---|
-| cold full corpus (first pass, no snapshot) | 22.4 s |
-| repeat pass, nothing changed | 0.31 s, 0 logs read |
-| fresh process, snapshot status check | 0.12 s |
-| fresh process, answer from snapshot | 55 ms, 0 logs read |
-| fresh process, in-memory answer | 21 ms |
-| same pass before this change | 23.6 s, whole corpus re-read every call |
+| cold full corpus (first pass, no snapshot) | 33.2 s, 479 logs read |
+| repeat pass, nothing changed | 0.48 s, 0 logs read |
+| fresh process, snapshot status check | 0.18 s |
+| fresh process, answer from snapshot | 0.15 s, 0 logs read, 478 of 483 sessions |
+| fresh process, **the whole phase chain** | **0.70 s, 1 log read** |
+| same, before the phase chain was fixed | 32.7 s, 479 logs re-read |
+
+The last two rows are the same question — what the panel shows a host that has just
+started — and the difference is the point: five sessions were missing or changed,
+and the answer now costs one read instead of re-reading everything.
+
+`snapshotStatus()` names what it could not vouch for, rather than only counting it:
+the payload carries `covered`, `stale`, `uncovered`, `fresh`, and up to eight
+`mismatches` of `{ id, reason, stored, current }` with `reason` one of `uncovered`
+(never seen), `no-entry` or `changed`, plus `mismatchesOmitted` for the rest. On the
+run above it answered `covered: 478, stale: 1, uncovered: 4` and named all five —
+one session still being written and four the backend cannot decode
+(`subagent/descriptor … unsupported descriptor version 2`, which the fold reports as
+skipped sessions rather than as missing ones).
 
 Contract tests live in `tools/verify-budget.mjs`: they assert that a bounded call
 returns promptly and partial, that repeated calls converge, that **a session is
 read exactly once per collector**, that a restart reuses the snapshot without
-reading a log, that a moved legacy corpus revision re-reads only legacy sessions,
-and that a long-budget warm pass completes the corpus.
+reading a log, that a moved corpus-wide hash re-reads **nothing** while one changed
+log re-reads exactly itself, that `snapshotStatus` names the session and both
+revisions, and that the panel's phase chain over a snapshot that is two sessions
+behind reads those two, lists the corpus once, and answers complete — as well as
+that a long-budget warm pass completes the corpus.
 
 Row order has its own contract test in `tools/verify-sort-order.mjs`. A fixture
 can only catch a wrong sort basis if the two candidate bases disagree on it, so
@@ -1245,7 +1284,7 @@ their own. The test fails on ten checks if that behaviour returns.
 
 ## Usage
 
-**Panel:** Plugins → the `dsh-model-stats` bundle → its page (see *Where to find
+**Panel:** Plugins → the `dsh-model-scorecard` bundle → its page (see *Where to find
 it* above).
 
 **Agent tool** — registered globally:
@@ -1300,10 +1339,80 @@ the fastest decode, and every model that produced errors.
 ## Install
 
 ```bash
-dsh plugin --profile web add link:/path/to/dsh-model-stats
+dsh plugin --profile web add link:/path/to/dsh-model-scorecard
 ```
 
 Or through the plugin manager, pointing `install_bundle` at this directory.
+
+**Coming from `dsh-model-stats`.** The name is a dependency, and it is a
+`link:` install: pnpm resolves it from the key in the profile's `package.json`
+and the `id:` of the composition row in `cordis.patch.yml`, and both still say
+the old name until they are changed. Leaving either one is not a degraded
+install — the plugin is simply not there, and the Plugins page shows the row
+with nothing under it.
+
+```bash
+# 1. the profile's dependency key and its bundle list
+#    ~/.dsh/profiles/web/package.json
+#      "dsh-model-stats":    "link:/path/to/dir"   ->  "dsh-model-scorecard": "link:/path/to/dir"
+#      "dsh-model-stats",                          ->  "dsh-model-scorecard",     (dsh.profile.bundles)
+# 2. the composition row — the id *is* the package name, there is no `name:` key
+#    ~/.dsh/profiles/web/cordis.patch.yml
+#      - id: model-stats                              ->  - id: model-scorecard
+# 3. reconcile node_modules and restart
+cd ~/.dsh/profiles/web && pnpm install
+# restart DSH, and reload the browser tab completely — the panel's client bundle
+# is served by the host, and the new routes only reach it after both are new.
+```
+
+The link path does not have to match the new name: pnpm installs a `link:` under
+whatever key the profile gives it and reads the package's own `name` from
+`package.json` (verified — `dsh-model-scorecard 0.3.0 <- …/dsh-model-stats`).
+Renaming the directory is still worth doing, but it is a separate step and not a
+condition of the install.
+
+Nothing else is a manual step: the cache directory moves itself, the panel's
+saved state is read from the old key, and the old routes keep answering — see
+*Renamed from `dsh-model-stats`* below.
+
+## Renamed from `dsh-model-stats` (2026-10-01)
+
+The plugin answered one question with numbers and now answers three, so the name
+names what a row holds: a configured `(provider, model)` route carrying what the
+history measured, what the adapter declared about itself, and whether the route
+answers right now. `stats` described the first of the three and the other two
+grew underneath it — the probe, the 0-100 rating, the declared metadata — and it
+collided with the official `@deepseek-ai/dsh-session-stats`, whose projection
+this plugin reproduces to the millisecond.
+
+| | before | now | on upgrade |
+|---|---|---|---|
+| package | `dsh-model-stats` | `dsh-model-scorecard` | the profile dependency and the composition row are keyed by it — see *Install* |
+| routes | `/api/model-stats…` | `/api/model-scorecard…` | the old four still answer for one release, from the same handler objects |
+| cache | `~/.dsh/cache/dsh-model-stats/` | `~/.dsh/cache/dsh-model-scorecard/` | moved by a `rename` on first activation: the folded snapshot and every stored probe result come with it, and the activation log says which way it went |
+| env var | `DSH_MODEL_STATS_CACHE_DIR` | `DSH_MODEL_SCORE_CARD_CACHE_DIR` | the old name still redirects the cache; the new one wins when both are set |
+| panel state | `dsh-model-stats:prefs:…` | `dsh-model-scorecard:prefs:…` | read once from the old keys and written under the new one; the old keys are left where they are |
+
+The alias is the same function object as the live path, not a second handler, so
+the two cannot answer different questions — and it is the reason the rename is
+safe at all: a browser tab holding the panel bundle from before the upgrade still
+asks `/api/model-stats/query`, and without the alias that table would simply stop
+refreshing. It is dropped in the next release.
+
+What did **not** move, on purpose:
+
+- **The tool names.** `model_stats` and `model_liveness` are global to DSH and
+  independent of the package name; each names its own question, and both are what
+  a model reaches for by habit. Renaming them would change the request path of
+  every session that never asked to be migrated.
+- **The CSS prefix `dsh-ms-`.** 291 uses in `client.js` and 58 assertions in
+  `tools/verify-panel-state.mjs` buy nothing a reader can see.
+- **The payload shape.** Every field, route contract and status code is the one
+  it was; the rename moved names, not answers.
+
+The title and the summary a reader sees come from `locale/<lang>.json` rather
+than from the package name, and were rewritten with it: **Model Scorecard** /
+**Таблица моделей**, with a description that names all three sources.
 
 ## Composition
 
@@ -1311,8 +1420,8 @@ Or through the plugin manager, pointing `install_bundle` at this directory.
 
 ```yaml
 - insert:
-    - id: model-stats
-      name: dsh-model-stats
+    - id: model-scorecard
+      name: dsh-model-scorecard
       config: {}
 ```
 
@@ -1322,6 +1431,7 @@ Or through the plugin manager, pointing `install_bundle` at this directory.
 node tools/verify-rating.mjs    # the formula: the anchors, the weights, the population gate, the nulls
 node tools/verify-rating-paths.mjs  # one pair, one score: cold fold, snapshot, selection and sinceMs agree; the marks match the panel's
 node tools/verify-metadata.mjs  # route metadata: bounded, cached, unknown is null, and no probe behind it
+node tools/verify-cache-dir.mjs  # the cache directory: the one-time move out of the previous name, and both variable names
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last, per-column keys, direction, the status order
 node tools/verify-provider-filter.mjs  # the provider filter: one reading of it everywhere
@@ -1338,30 +1448,45 @@ node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragmen
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-01, all fifteen green (`exit=0`):
+Counts as they stand on 2026-10-01, all sixteen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
-| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js` | 338 |
-| `verify-selection.mjs` | rules, catalog, and an independent recomputation of the aggregate | 122 |
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js` | 341 |
+| `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
 | `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
 | `verify-metadata.mjs` | bounded lookups, TTL, dedup, disposal, the whitelist | 60 |
 | `verify-provider-filter.mjs` | one reading of the filter on every surface | 58 |
 | `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
-| `verify-budget.mjs` | the collection contract | 26 |
-| `verify-liveness.mjs` | the catalog join and the state classification | 20 |
+| `verify-budget.mjs` | the collection contract, and the panel's phase chain | 47 |
+| `verify-liveness.mjs` | the catalog join and the state classification | 21 |
+| `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
 | `verify-probe-budget.mjs` | the deadline rule | 12 |
 
-That is 869 counted assertions in the twelve tools that print a count; the other
+That is 912 counted assertions in the fourteen tools that print a count; the other
 three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
-in the corpus, and `verify-tokens-per-fragment.mjs` over 21 576 folded steps of
+in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
 20 models. `verify-retry.mjs` reads a real corpus and takes its path as its first
 argument, defaulting to `/tmp/dshcorpus` (183 sessions here) — a missing corpus
 is an inability to run, never a pass.
+
+`verify-official.mjs` picks its own session and holds it to the same rule. It
+compares the largest settled log that contains a completed step, and when no
+candidate does it prints `FAIL: no candidate session contains a completed step`
+and exits 1. An exact comparison of two zeros is not a parity result: before
+that rule the tool took whichever log `readdirSync` returned first, and on
+2026-10-01 that was a five-event session with no step in it, so every field was
+0, every diff was 0, and the tool printed OK. A pass now states its own volume —
+`684 timed step(s), 6932919 ms of time-to-first-token` — so a hollow run cannot
+be filed as evidence. The `steps` row stays outside the equality check, because
+the official counter counts assembled messages and this one counts `step/end`; in
+the log compared on 2026-10-01 — 4 581 events, 684 timed steps, 6 932 919 ms of
+time-to-first-token, 8 867 157 ms in a model call — the two step counters differ
+by 3 out of 687, and every timing total is equal to the millisecond.
 
 Two of the rating's properties can only be tested with a frozen clock, and both
 are pinned on the two surfaces rather than asserted once. The panel test mounts
