@@ -120,6 +120,12 @@ window.__ModuleLoader__.load({
         'models.note': 'выбрано моделей: {selected} из {total}',
         'models.truncated': 'Показаны {shown} из {total} выбранных строк.',
         'models.showAll': 'Показать все',
+        // The rows drawn against the rows the answer carries. Deliberately not the
+        // same sentence as `models.truncated`: that one is about what the host sent
+        // and ends in an offer to ask for the rest, this one is about what is on the
+        // page and ends in an offer to draw more of what already arrived.
+        'models.painted': 'На экране первые {shown} из {total} строк.',
+        'models.paintMore': 'Ещё {count}',
         'models.storage':
           'Браузер не разрешает сохранять данные: выбор действует, пока открыта вкладка, и не переживёт её закрытие.',
         'models.unknownCatalog':
@@ -355,6 +361,8 @@ window.__ModuleLoader__.load({
         'models.note': 'models selected: {selected} of {total}',
         'models.truncated': 'Showing {shown} of {total} selected rows.',
         'models.showAll': 'Show all',
+        'models.painted': 'The first {shown} of {total} rows are drawn.',
+        'models.paintMore': '{count} more rows',
         'models.storage':
           'The browser does not allow storing data: the selection lasts while this tab is open and will not survive closing it.',
         'models.unknownCatalog':
@@ -710,6 +718,29 @@ window.__ModuleLoader__.load({
     // unbounded page is an answer that cannot be sent.
     const MAX_ROWS = 2000
 
+    // How many rows the panel is willing to put on the page, ever.
+    //
+    // Not a payload bound — that is `MAX_ROWS` above — but a rendering one, and the
+    // two are different numbers for a measured reason. Measured in this tree: a row
+    // of the expanded set is 21 cells and ~55 element nodes, so the default page of
+    // 200 rows is ~11 200 nodes and takes 59 ms to build, while the 2000 rows «Показать
+    // все» may ask for are ~110 200 nodes and 302 ms before the browser has styled
+    // anything (Chromium then needs ~220 ms of layout and ~107 ms of paint for a
+    // 2000×21 table of the same shape). `content-visibility: auto` was measured as
+    // the alternative and is not one: on the rows it buys ~2% of that layout and ~9%
+    // of the paint, on the cells it collapses every row to its intrinsic height
+    // (scrollHeight 61 421 -> 29 031, so the scrollbar lies), and on the body it does
+    // nothing, because the body always intersects the viewport.
+    //
+    // So the bound is on rows drawn rather than on rows sent, and it is the reader's
+    // own `PAGE_ROWS`: a page is what the table is for, the answer still carries the
+    // whole selection, and "show more" appends the next page to the same table. Every
+    // row stays a real row — no windowing, so the pinned column, the keyboard, the
+    // screen-reader associations and the browser's own find-in-page keep working — and
+    // the DOM is bounded by what the reader has asked to see rather than by what the
+    // host had to fold.
+    const RENDER_ROWS = PAGE_ROWS
+
     // The host bounds its own panel answer (PANEL_BUDGET_MS, 2.5 s in this tree)
     // and returns partial work, which the refresh loop then polls for. This
     // deadline is only the point where a host that is not answering at all
@@ -742,7 +773,7 @@ window.__ModuleLoader__.load({
     const MAX_REFRESHES = 20
 
     /**
-     * The identity of one query: `sort.dir|view|selection|archive`.
+     * The identity of one query: `sort.dir|view|selection|archive|page`.
      *
      * It names a cache entry and it labels the rows a payload answers. The panel
      * needs the second job because a switch to another sort — or to another set of
@@ -759,10 +790,19 @@ window.__ModuleLoader__.load({
      * before the archive existed. A payload cached by a build that predates the
      * selection is not a hit under any key: its rows answer a question about every
      * measured model, which is not what the panel asks now.
+     *
+     * The last part is the page the reader raised. «Показать все» is a different
+     * question, not a larger answer to this one, and a key that cannot tell the two
+     * apart stores the first under the second: a later open paints two thousand rows
+     * as the answer to a two-hundred-row question, and the refresh behind it takes
+     * them away again with nothing to explain the difference. The part is absent
+     * unless the page was raised, so the ordinary question keeps the key it always
+     * had — the store is versioned by shape, not by question.
      */
-    function queryKey(sort, dir, view, selection, archived) {
+    function queryKey(sort, dir, view, selection, archived, whole = false) {
       const base = `${sort}.${dir}|${view}|${JSON.stringify(canonicalSelectionRules(selection))}`
-      return archived === true ? `${base}|archive` : base
+      const named = archived === true ? `${base}|archive` : base
+      return whole === true ? `${named}|all` : named
     }
 
     /** Best-effort read: a broken or unavailable store must never break the panel. */
@@ -778,8 +818,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function readCachedPayload(sort, dir, view, selection, archived) {
-      const entry = readCache()[queryKey(sort, dir, view, selection, archived)]
+    function readCachedPayload(sort, dir, view, selection, archived, whole = false) {
+      const entry = readCache()[queryKey(sort, dir, view, selection, archived, whole)]
       if (entry === null || typeof entry !== 'object') return null
       if (typeof entry.at !== 'number' || Date.now() - entry.at > STORE_MAX_AGE_MS) return null
       const data = entry.data
@@ -788,13 +828,50 @@ window.__ModuleLoader__.load({
       return data
     }
 
-    function writeCachedPayload(sort, dir, view, selection, archived, data) {
+    /**
+     * What the browser may be asked to keep.
+     *
+     * A number of bytes rather than a number of keys, because the entries are not the
+     * same size and stopped being the same size: this panel's own answer measures 183
+     * KB for 141 rows, so a row is ~1.3 KB, and the page the reader can raise to 2000
+     * makes one entry ~2.5 MB where the default page makes ~260 KB. "Four keys" was
+     * chosen when an entry was ~60 KB and says nothing about either of those; against
+     * a 5 MB origin quota shared with the rest of the GUI, four large answers are
+     * the whole of it and one of them would have failed the write on its own.
+     *
+     * The budget is deliberately under the quota rather than at it: this store is one
+     * of several on the same origin, and the panel's own failure mode for a full one
+     * is already benign — the write is swallowed, the entry is simply not there next
+     * time, and the reader waits for a request instead of painting from a cache.
+     */
+    const CACHE_BUDGET_BYTES = 2 * 1024 * 1024
+
+    /**
+     * The last answer is kept, and only the last answer for that question.
+     *
+     * Walking newest-first from the budget's point of view rather than the oldest
+     * first: what is dropped is whatever does not fit behind what the reader just
+     * asked for, so a single entry larger than the whole budget — the 2000-row answer
+     * is — is not stored at all. That is the intended outcome and not an accident of
+     * the arithmetic: an answer too big to keep is asked for again, and the panel is
+     * built to render without one.
+     */
+    function writeCachedPayload(sort, dir, view, selection, archived, whole, data) {
       try {
         const entries = readCache()
-        entries[queryKey(sort, dir, view, selection, archived)] = { at: Date.now(), data }
-        // A handful of keys is enough for a session; old ones would only grow.
-        const keys = Object.keys(entries)
-        for (const key of keys.slice(0, Math.max(0, keys.length - 4))) delete entries[key]
+        entries[queryKey(sort, dir, view, selection, archived, whole)] = { at: Date.now(), data }
+        const keys = Object.keys(entries).sort((a, b) => (entries[a]?.at ?? 0) - (entries[b]?.at ?? 0))
+        let bytes = 0
+        for (let index = keys.length - 1; index >= 0; index -= 1) {
+          const key = keys[index]
+          const size = JSON.stringify(entries[key]).length
+          // What is dropped does not spend the budget. An entry that did not fit is
+          // gone, and counting it anyway would push the next one out behind it — a
+          // single 2000-row answer would then empty the store rather than only
+          // cost itself a place in it.
+          if (bytes + size > CACHE_BUDGET_BYTES) delete entries[key]
+          else bytes += size
+        }
         window.localStorage.setItem(STORE_KEY, JSON.stringify({ entries }))
       } catch {
         // A full or disabled store is not the panel's problem.
@@ -1964,6 +2041,7 @@ window.__ModuleLoader__.load({
      * The list is the metrics, not the columns: a count (`шагов`) is the size of the
      * sample rather than a figure about the model, and a bar under it would be read
      * as "the busiest model" next to a column of latencies.
+     *
      * Two columns of the full set are deliberately absent, and the reason belongs
      * here rather than in their cells, so a reader of the table of columns does not
      * have to infer it from cells that look exactly like the four beside them:
@@ -3039,6 +3117,11 @@ window.__ModuleLoader__.load({
       // reports and lets the reader answer, rather than one it hides by asking for
       // more rows than any request should carry (see `MAX_ROWS`).
       const [wholeSelection, setWholeSelection] = React.useState(false)
+      // How much of the answer is on the page, and which question that window
+      // belongs to. Kept as a pair so the window resets when the question changes
+      // without an effect: the harness's React stub runs no effects, and a reset
+      // that only exists inside one is a reset no test can reach.
+      const [painted, setPainted] = React.useState({ key: null, count: RENDER_ROWS })
       // The deep metrics start collapsed and the choice sticks to the browser
       // across reopenings: the table answers the question first and keeps the
       // deeper figures one click away.
@@ -3052,8 +3135,15 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState(() =>
         querySwitched(
           EMPTY_STATE,
-          readCachedPayload(initialQuery.sort, initialQuery.dir, initialQuery.view, initialQuery.selection, initialQuery.archived),
-          queryKey(initialQuery.sort, initialQuery.dir, initialQuery.view, initialQuery.selection, initialQuery.archived),
+          readCachedPayload(
+            initialQuery.sort,
+            initialQuery.dir,
+            initialQuery.view,
+            initialQuery.selection,
+            initialQuery.archived,
+            false,
+          ),
+          queryKey(initialQuery.sort, initialQuery.dir, initialQuery.view, initialQuery.selection, initialQuery.archived, false),
         ),
       )
       const timedOutRef = React.useRef(false)
@@ -3224,8 +3314,8 @@ window.__ModuleLoader__.load({
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             const data = await response.json()
             if (data.ok === false) throw new Error(data.error ?? 'unknown error')
-            writeCachedPayload(sort, dir, view, selection, archived, data)
-            setState(queryAnswered(data, queryKey(sort, dir, view, selection, archived)))
+            writeCachedPayload(sort, dir, view, selection, archived, wholeSelection, data)
+            setState(queryAnswered(data, queryKey(sort, dir, view, selection, archived, wholeSelection)))
             if (manual) say(t('announce.updated'))
           } catch (error) {
             if (error && error.name === 'AbortError') {
@@ -3273,8 +3363,8 @@ window.__ModuleLoader__.load({
         setState((prev) =>
           querySwitched(
             prev,
-            readCachedPayload(sort, dir, view, selection, archived),
-            queryKey(sort, dir, view, selection, archived),
+            readCachedPayload(sort, dir, view, selection, archived, wholeSelection),
+            queryKey(sort, dir, view, selection, archived, wholeSelection),
           ),
         )
 
@@ -3315,6 +3405,12 @@ window.__ModuleLoader__.load({
       }, [state, load])
 
       const rows = Array.isArray(state.data?.rows) ? state.data.rows : []
+      // The window belongs to the question that was answered, not to the panel: a new
+      // answer to the same question keeps what the reader has already drawn, and an
+      // answer to another one starts from the first page again. Derived rather than
+      // stored in an effect, because the harness's React stub runs no effects and a
+      // reset that only lives in one is a reset nothing can test.
+      const paintedRows = painted.key === state.dataQuery ? painted.count : RENDER_ROWS
       // The pairs a probe is running for right now, as the host named them, and
       // the one flag every liveness control reads. Both are derived rather than
       // stored: a control that kept its own copy of "busy" would drift from the
@@ -3458,20 +3554,20 @@ window.__ModuleLoader__.load({
         applySelection(rulesWithPair(selection, scope, provider, model, on, inherited))
       }
       /**
-       * One provider's checkbox: all of it, none of it, or only the measured part.
-       *
-       * Which one is a function of where the group stands rather than of the click
-       * alone, so a click reads the host's own count and asks for the next state
-       * (`nextProviderRule`): a partial group is finished first, a full one is
-       * cleared, and an empty one comes back as its measured models. The rule it
-       * writes is what makes the group stay a decision — a model the provider gains
-       * later follows it.
-       *
-       * The scopes it writes are the ones `providerGroupScopes` named, which is
-       * both of them for a group that spans both, and the next state is asked for
-       * once and written to each: two scopes holding the same rule are one decision
-       * about a provider, which is what a single row with a single count promises.
-       */
+     * One provider's checkbox: all of it, none of it, or only the measured part.
+     *
+     * Which one is a function of where the group stands rather than of the click
+     * alone, so a click reads the host's own count and asks for the next state
+     * (`nextProviderRule`): a partial group is finished first, a full one is
+     * cleared, and an empty one comes back as its measured models. The rule it
+     * writes is what makes the group stay a decision — a model the provider gains
+     * later follows it.
+     *
+     * The scopes it writes are the ones `providerGroupScopes` named, which is
+     * both of them for a group that spans both, and the next state is asked for
+     * once and written to each: two scopes holding the same rule are one decision
+     * about a provider, which is what a single row with a single count promises.
+     */
       const chooseProviderGroup = (group, groupRules, counts) => {
         const nextRule = nextProviderRule(groupRules.rule, counts)
         const next = groupRules.scopes.reduce(
@@ -3836,7 +3932,7 @@ window.__ModuleLoader__.load({
       // not-yet-reloaded host cannot serve — a heading added by a newer panel —
       // would draw its arrow over rows that are in a different order, and say so
       // to a screen reader besides.
-      const answered = state.dataQuery === queryKey(sort, dir, view, selection, archived)
+      const answered = state.dataQuery === queryKey(sort, dir, view, selection, archived, wholeSelection)
       const orderOnScreen =
         answered && typeof state.data?.sort === 'string' ? state.data.sort : sort
 
@@ -3908,7 +4004,7 @@ window.__ModuleLoader__.load({
       const body = h(
         'tbody',
         null,
-        ...rows.map((row) => {
+        ...rows.slice(0, paintedRows).map((row) => {
           const key = `${row.provider}/${row.model}`
           const cell = livenessView(row, liveOverrides, checkingSet, t, fmt)
           const ctx = {
@@ -4029,6 +4125,36 @@ window.__ModuleLoader__.load({
             ),
           )
         : null
+      // And the bound on this side of the wire. The answer may carry the whole
+      // selection — that is what `truncated` and "show all" are for — and the panel
+      // still draws one page of it at a time (see `RENDER_ROWS`): the table is then
+      // bounded by what the reader asked to look at rather than by what the host had
+      // to fold. The notice is below the table on purpose, because that is where a
+      // reader who reached the last row is standing when they meet it.
+      const paintNotice =
+        rows.length > paintedRows
+          ? h(
+              'div',
+              { className: 'dsh-ms-filter-note', role: 'status' },
+              t('models.painted', {
+                shown: fmt.count(paintedRows),
+                total: fmt.count(rows.length),
+              }),
+              ' ',
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dsh-ms-chip',
+                  onClick: () =>
+                    setPainted({ key: state.dataQuery, count: paintedRows + RENDER_ROWS }),
+                },
+                t('models.paintMore', {
+                  count: fmt.count(Math.min(RENDER_ROWS, rows.length - paintedRows)),
+                }),
+              ),
+            )
+          : null
       // A real `disabled` takes the button out of the tab order and drops the
       // focus of whoever just pressed it. The busy state is expressed with
       // aria-disabled plus a guarded handler instead, so the control stays
@@ -4064,7 +4190,7 @@ window.__ModuleLoader__.load({
       // panel says which wait it is in instead of passing the old order off as
       // the new one. The filter is named with it — a stale table of every
       // provider must not be read as a stale table of the selected ones.
-      const currentKey = queryKey(sort, dir, view, selection, archived)
+      const currentKey = queryKey(sort, dir, view, selection, archived, wholeSelection)
       const behind = state.data !== null && state.data !== undefined && state.dataQuery !== currentKey
       const sortLabel = orderName(sort)
       // The selection is named here for the same reason the archive is: a stale
@@ -4090,6 +4216,7 @@ window.__ModuleLoader__.load({
           { className: 'dsh-ms-wrap' },
           truncationNotice,
           h('table', { className: 'dsh-ms-table' }, header, body),
+          paintNotice,
         )
       } else if (kind === 'error') {
         // A failure wears the alert's shape in the error's own colour: a request

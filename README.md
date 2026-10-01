@@ -843,6 +843,24 @@ to the host's ceiling of 2000. A truncated table read as the whole selection is 
 one thing a table that lists what the reader chose must not do, so the notice is not
 optional and the limit is never silently applied.
 
+**The answer may be large; the table is drawn a page at a time.** «Показать все»
+buys the whole selection from the host — 2000 rows, 183 KB of JSON — and the panel
+still puts one page of it on the screen, with a line under the table saying how many
+of how many are drawn and a control that appends the next page to the same table.
+The two bounds are different on purpose: the payload's is the host's (how much can be
+sent), the panel's is about what a browser should be asked to lay out. Measured in
+this tree, a row of the expanded set is 21 cells and ~55 element nodes, so 200 rows
+are ~11 200 nodes and take 59 ms to build while 2000 are ~110 200 and 302 ms before
+the browser has styled anything, on top of ~220 ms of layout and ~107 ms of paint for
+a table of that shape in Chromium. `content-visibility` was measured as the
+alternative and is not one: on rows it buys ~2 % of the layout and ~9 % of the paint,
+on cells it collapses every row to its intrinsic height (the table's scrollHeight
+goes 61 421 → 29 031, so the scrollbar lies), and on the body it does nothing, because
+the body always intersects the viewport. Nothing is virtualised, so every drawn row is
+a real row: the pinned first column, the keyboard, the screen-reader associations and
+the browser's own find-in-page all keep working, and the notice is a `role="status"`
+line rather than a silently shorter table.
+
 **The provider view does not drop the selection.** A provider row is a roll-up of
 the models the reader chose, and it says so: `1 из 2 моделей` beside the provider.
 That matters because the aggregate is computed from the selected raw measurements
@@ -1173,9 +1191,16 @@ before this rule existed still hydrates into the same keys.
 - Each session is folded once per process and cached against its persistence
   revision; the revision comes from the corpus listing rather than a per-session
   `stat`, which is what keeps a cold pass linear instead of quadratic.
-- The browser keeps the last answer per sort/direction/view in `localStorage`, so
-  the table
-  appears instantly after a reload and refreshes behind the first paint.
+- The browser keeps the last answer per question in `localStorage`, so the table
+  appears instantly after a reload and refreshes behind the first paint. The store is
+  trimmed by **bytes**, not by a number of keys: this panel's own answer measures
+  183 KB for 141 rows, so a row is ~1.3 KB, a default page is ~260 KB and the 2000
+  rows «Показать все» may buy are ~2.5 MB — against a 5 MB origin quota shared with
+  the rest of the GUI. The budget is 2 MB, newest first, and an answer larger than it
+  is not stored at all rather than evicting the answers that fit. The question a
+  stored entry answers includes the page: a whole-selection answer is not a larger
+  answer to a paged question, and a store that could not tell them apart served one
+  for the other.
 - All services are injected (`tools`, `webServer`, `sessionQuery`), and every read
   failure is contained and reported as a skipped session.
 - Zero runtime dependencies, import-free host half apart from this package's own modules.
@@ -1481,7 +1506,7 @@ Counts as they stand on 2026-10-02, all seventeen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
-| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: a provider group, and the bars its cells may promise | 358 |
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: the answer's page, the cache budget, a group that spans both scopes | 373 |
 | `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
 | `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
@@ -1490,14 +1515,17 @@ Counts as they stand on 2026-10-02, all seventeen green (`exit=0`):
 | `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
 | `verify-budget.mjs` | the collection contract, and the panel's phase chain | 47 |
-| `verify-liveness.mjs` | the catalog join and the state classification | 20 |
+| `verify-liveness.mjs` | the catalog join and the state classification; a live walk, so its count moves with what the stack answers | 22 |
 | `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 937 counted assertions in the fourteen tools that print a count; the other
-three assert by exhaustive comparison instead — `verify-official.mjs` field by
+That is 954 counted assertions in the fourteen tools that print a count, and 22 of
+them are the live walk of `verify-liveness.mjs` — it prints one check per probed pair
+until one answers and three more once one does, so that row reads 20, 21 or 22
+depending on the run (22 on 2026-10-02, which is why the number here is dated). The
+other three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
 20 models. `verify-retry.mjs` reads a real corpus and takes its path as its first

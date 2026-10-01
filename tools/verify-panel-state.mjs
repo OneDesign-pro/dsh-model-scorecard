@@ -530,9 +530,10 @@ function rules({ base = 'measured', providers = {}, pairs = {}, archiveBase = 'n
  * and a key built by the same function under test would agree with it by
  * construction — including when both are wrong about what a question is.
  */
-function cacheKey(sort, dir, view, { selection = DEFAULT_SELECTION, archived = false } = {}) {
+function cacheKey(sort, dir, view, { selection = DEFAULT_SELECTION, archived = false, whole = false } = {}) {
   const base = `${sort}.${dir}|${view}|${JSON.stringify(selection)}`
-  return archived === true ? `${base}|archive` : base
+  const named = archived === true ? `${base}|archive` : base
+  return whole === true ? `${named}|all` : named
 }
 
 function payload(
@@ -1924,6 +1925,14 @@ console.log('\n--- выбор моделей: дерево ---')
   )
 }
 
+// What the panel keeps, read back out of the store the harness fakes: the entries
+// by key, and how many bytes they are worth. Both are used by the two sections
+// below, which are about one question being answered from another one's entry.
+const padTo = (data, bytes) => ({ ...data, filler: 'x'.repeat(bytes) })
+const cacheEntries = (view) => JSON.parse(view.store.get('dsh-model-scorecard:v3')).entries
+const cacheBytes = (entries) =>
+  Object.values(entries).reduce((sum, entry) => sum + JSON.stringify(entry).length, 0)
+
 // --- the page the selection does not fit in ------------------------------------
 // A table that shows part of the selection must say so, and must let the reader ask
 // for the rest — a truncated answer read as the whole one is the failure this notice
@@ -1937,6 +1946,169 @@ console.log('\n--- выбор моделей: дерево ---')
   buttonWithText(tree, 'Показать все').props.onClick()
   tree = await view.pump()
   check('и есть чем попросить весь набор', askedFor(view, 1, { sort: 'ttft', dir: 'asc', limit: 2000 }), describe(view, 1))
+
+  // The page is part of the question. Two thousand rows stored under the key for
+  // two hundred would be served to the next open as that question's answer, and the
+  // refresh behind it would take them away again — rows appearing and disappearing
+  // from a table the reader never touched.
+  // Six rows against the page's three, so the two entries are distinguishable by
+  // what they hold: the harness builds `shown` from the rows, so a payload cannot
+  // claim a count it does not carry.
+  const everything = payload('ttft', [
+    ...byTtft.rows,
+    row('bulk', 'm-1', { steps: 3, ttftMedian: 1200, tpsMedian: 20 }),
+    row('bulk', 'm-2', { steps: 4, ttftMedian: 1300, tpsMedian: 21 }),
+    row('bulk', 'm-3', { steps: 5, ttftMedian: 1400, tpsMedian: 22 }),
+  ])
+  view.requests[1].answer(everything)
+  tree = await view.pump()
+  const entries = cacheEntries(view)
+  const paged = entries[cacheKey('ttft', 'asc', 'model')]
+  const whole = entries[cacheKey('ttft', 'asc', 'model', { whole: true })]
+  check(
+    'ответ «все» лежит рядом с ответом страницы, а не поверх него',
+    // Identity is not available here — the harness round-trips an answer through
+    // JSON on the way in — so the two entries are told apart by what they hold: the
+    // page carries three rows and calls itself truncated, the whole answer six.
+    paged !== undefined &&
+      whole !== undefined &&
+      paged.data?.shown?.models === 3 &&
+      paged.data?.truncated === true &&
+      whole.data?.shown?.models === 6 &&
+      whole.data?.truncated === false,
+    `${Object.keys(entries).join(' | ')} — на странице ${paged?.data?.shown?.models ?? '—'} строк, в «все» ${whole?.data?.shown?.models ?? '—'}`,
+  )
+
+  // And a store that holds only the whole answer cannot open the ordinary question.
+  const onlyWhole = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model', { whole: true })]: { at: Date.now(), data: everything } } })
+  const again = await onlyWhole.pump()
+  check(
+    'следующее открытие не рисует ответ на другой вопрос',
+    rowLabels(again).length === 0,
+    rowLabels(again).join(' | ') || '(пусто)',
+  )
+  check('и спрашивает обычную страницу', askedFor(onlyWhole, 0, { sort: 'ttft', dir: 'asc', limit: 200 }), describe(onlyWhole, 0))
+}
+
+// --- what the panel is willing to draw -----------------------------------------
+//
+// The answer may carry the whole selection — that is what the truncation notice and
+// «Показать все» are for — and the table draws one page of it at a time. Measured in
+// this tree, a row of the expanded set is 21 cells and ~55 element nodes, so 200 rows
+// are ~11 200 nodes and 59 ms and the 2000 the host will send are ~110 200 and 302 ms
+// before the browser has styled anything; `content-visibility` was measured as the
+// alternative and buys ~2% of the layout. The window is what keeps the DOM a function
+// of what the reader asked to look at.
+{
+  const bulk = (count) =>
+    payload(
+      'ttft',
+      Array.from({ length: count }, (_, index) =>
+        row('bulk', `m-${index}`, { steps: index + 1, ttftMedian: 900 + index, tpsMedian: 30 + index }),
+      ),
+      { providerList: PROVIDER_LIST },
+    )
+  const view = mountPanel()
+  let tree = await view.pump()
+  view.requests[0].answer(bulk(450))
+  tree = await view.pump()
+  check('таблица рисует страницу, а не весь ответ', rowLabels(tree).length === 200, `строк: ${rowLabels(tree).length}`)
+  check(
+    'и говорит, сколько из чего нарисовано',
+    text(tree).includes('На экране первые 200 из 450 строк'),
+    text(tree).slice(text(tree).indexOf('На экране'), text(tree).indexOf('На экране') + 60),
+  )
+
+  buttonWithText(tree, 'Ещё 200').props.onClick()
+  tree = await view.pump()
+  check('по кнопке дорисовывается следующая страница', rowLabels(tree).length === 400, `строк: ${rowLabels(tree).length}`)
+
+  buttonWithText(tree, 'Ещё 50').props.onClick()
+  tree = await view.pump()
+  check('и последняя добирается остатком, а не целой страницей', rowLabels(tree).length === 450, `строк: ${rowLabels(tree).length}`)
+  check('когда нарисовано всё, надписи нет', !text(tree).includes('На экране первые'), text(tree).slice(text(tree).indexOf('На экране'), text(tree).indexOf('На экране') + 40))
+
+  // The window belongs to the question, not to the panel: another sort is another
+  // answer, and it opens on its first page rather than on the previous one's depth.
+  sortButton(tree, 'tps').props.onClick()
+  tree = await view.pump()
+  view.requests[1].answer(bulk(450))
+  tree = await view.pump()
+  check('другой вопрос начинается с первой страницы', rowLabels(tree).length === 200, `строк: ${rowLabels(tree).length}`)
+
+  // Both languages, because the notice is the only thing that tells a reader their
+  // table is short: a string that exists in one dictionary and not the other is a
+  // reader looking at a bare key. The other half of the pair is the button, which is
+  // the only way to see the rest.
+  const english = mountPanel({ locale: 'en' })
+  let en = await english.pump()
+  english.requests[0].answer(bulk(450))
+  en = await english.pump()
+  check(
+    'the notice and its control exist in English too',
+    text(en).includes('The first 200 of 450 rows are drawn') &&
+      buttonWithText(en, '200 more rows') !== undefined &&
+      buttonWithText(en, '200 more rows') !== null,
+    text(en).slice(text(en).indexOf('The first'), text(en).indexOf('The first') + 70),
+  )
+}
+
+// --- what the browser may be asked to keep -------------------------------------
+//
+// The store is trimmed by bytes, not by keys: four keys was a policy when an entry
+// was ~60 KB, and this panel's own answer measures 183 KB for 141 rows, so the page
+// the reader can raise makes one entry ~2.5 MB where the default page makes ~260 KB.
+// The answers below are padded rather than built from thousands of rows — what the
+// panel measures is `JSON.stringify` of the entry, and the padding is what the
+// policy is about.
+{
+  // Three old entries of 800 KB each: 2.4 MB, over the 2 MB budget before the new
+  // answer is counted. The oldest must go first and the newest must stay.
+  const old = {}
+  // Three sorts, none of them the one the panel opens on: the answer below writes
+  // `ttft`, so seeding it too would overwrite the padded entry under its own key and
+  // leave the budget with nothing to decide.
+  for (const [index, sort] of ['tps', 'errors', 'rating'].entries()) {
+    old[cacheKey(sort, 'asc', 'model')] = {
+      at: 1_700_000_000_000 + index * 1000,
+      data: padTo(payload(sort, byTtft.rows), 800 * 1024),
+    }
+  }
+  const view = mountPanel({ entries: old })
+  await view.pump()
+  view.requests[0].answer(payload('ttft', byTtft.rows))
+  await view.pump()
+  const entries = cacheEntries(view)
+  check(
+    'старый ответ вытесняется, а новый остаётся',
+    entries[cacheKey('ttft', 'asc', 'model')] !== undefined &&
+      entries[cacheKey('tps', 'asc', 'model')] === undefined &&
+      entries[cacheKey('errors', 'asc', 'model')] !== undefined,
+    Object.keys(entries).join(' | '),
+  )
+  check('и хранилище осталось в бюджете', cacheBytes(entries) <= 2 * 1024 * 1024, `${Math.round(cacheBytes(entries) / 1024)} KB`)
+}
+{
+  // An answer larger than the whole budget is not stored at all — which is the
+  // intended outcome, not a failure: it is asked for again, and the panel renders
+  // without a cached one. The entry that was already there is left alone.
+  const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } } })
+  let tree = await view.pump()
+  view.requests[0].answer(payload('ttft', byTtft.rows, { truncated: true, shown: { models: 400, steps: 4000, errors: 0 } }))
+  tree = await view.pump()
+  buttonWithText(tree, 'Показать все').props.onClick()
+  tree = await view.pump()
+  view.requests[1].answer(padTo(payload('ttft', byTtft.rows), 3 * 1024 * 1024))
+  tree = await view.pump()
+  const entries = cacheEntries(view)
+  check(
+    'ответ больше бюджета не хранится вовсе',
+    entries[cacheKey('ttft', 'asc', 'model', { whole: true })] === undefined &&
+      entries[cacheKey('ttft', 'asc', 'model')] !== undefined,
+    `${Object.keys(entries).join(' | ') || '(пусто)'} — ${Math.round(cacheBytes(entries) / 1024)} KB`,
+  )
+  check('и то, что поместилось, осталось целым', cacheBytes(entries) <= 2 * 1024 * 1024, `${Math.round(cacheBytes(entries) / 1024)} KB`)
+  check('а таблица показана — кэш ей не нужен', rowLabels(tree).length === 3, rowLabels(tree).join(' | '))
 }
 
 console.log('\n--- архив: модели вне текущей конфигурации ---')
@@ -3440,3 +3612,4 @@ if (failures === 0) {
   console.log(`ПРОВАЛЕНО ПРОВЕРОК: ${failures}`)
   process.exitCode = 1
 }
+
