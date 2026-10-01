@@ -1465,7 +1465,7 @@ node tools/verify-tree.mjs   # what the package ships: a reachable lib/, an impo
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-01, all seventeen green (`exit=0`):
+Counts as they stand on 2026-10-02, all seventeen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
@@ -1478,13 +1478,13 @@ Counts as they stand on 2026-10-01, all seventeen green (`exit=0`):
 | `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
 | `verify-budget.mjs` | the collection contract, and the panel's phase chain | 47 |
-| `verify-liveness.mjs` | the catalog join and the state classification | 21 |
+| `verify-liveness.mjs` | the catalog join and the state classification | 20 |
 | `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
-| `verify-probe-budget.mjs` | the deadline rule | 12 |
+| `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 927 counted assertions in the fourteen tools that print a count; the other
+That is 928 counted assertions in the fourteen tools that print a count; the other
 three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
@@ -1533,7 +1533,14 @@ service the plugin declares.
 `verify-probe-budget.mjs` proves the deadline rule without spending provider
 traffic: a local server answers just past the old 15 s deadline and the probe
 still records an answer, a route that declares a 400 ms deadline of its own is
-aborted at exactly that, and a caller's explicit `timeoutMs` still wins.
+aborted at exactly that, and a caller's explicit `timeoutMs` still wins. It also
+records every request body the local server is sent and asserts what the fallback
+posts — the model, one short turn, no stream — and that it posts **no token cap of
+its own**. That cap was the same defect the `ctx.llm` probe had one transport
+over: `max_tokens` is a field name each model spells for itself
+(`max_completion_tokens` against `max_tokens`), reasoning models of the gpt-5
+family refuse it by name, and a route that answers every real request was read as
+refused. A `ping` is short whatever ceiling the route chooses.
 
 `lib/liveness-http.js` is the config-reading fallback and carries its own rules:
 it resolves keys through `$DSH_HOME/.credentials.yaml` and never returns, logs or

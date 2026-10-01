@@ -50,14 +50,20 @@ const server = createServer((req, res) => {
     body += chunk
   })
   req.on('end', () => {
-    let model = ''
+    // The body is kept whole, not just the model out of it: what this fallback
+    // posts is half the question. A cap of the plugin's own invention belongs to
+    // the same family of defects the `ctx.llm` probe had — the codex backend
+    // answers a present `maxTokens` with `max_output_tokens`, which it refuses
+    // by name, and a route that answers every real request read as broken.
+    let sent = {}
     try {
-      model = JSON.parse(body)?.model ?? ''
+      sent = JSON.parse(body) ?? {}
     } catch {
-      model = ''
+      sent = {}
     }
+    const model = typeof sent.model === 'string' ? sent.model : ''
     const delay = model === 'slow' ? SLOW_MS : model === 'slowish' ? SLOWISH_MS : 10
-    asked.push({ model, delay })
+    asked.push({ model, delay, sent })
     setTimeout(() => {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'pong' } }] }))
@@ -180,6 +186,40 @@ check(
 )
 
 check('the server was asked, so none of the above was a local short-circuit', asked.length > 0, `${asked.length} request(s)`)
+
+// --- what the fallback posted -------------------------------------------------
+//
+// Every request the server saw, in full. This is the assertion D-016 asked for,
+// and it is the only place the posted shape is pinned: the probe through
+// `ctx.llm` is checked by the adapter that receives the call, and this body is
+// written by hand, so nothing else in the suite would notice a parameter added
+// to it.
+const posted = asked.map((entry) => entry.sent)
+check(
+  'the fallback posts no token cap of its own',
+  posted.length > 0 &&
+    posted.every(
+      (body) =>
+        !('max_tokens' in body) &&
+        !('max_completion_tokens' in body) &&
+        !('max_output_tokens' in body),
+    ),
+  `${posted.length} request(s), keys: ${[...new Set(posted.flatMap((body) => Object.keys(body)))].join(', ') || '(none)'}`,
+)
+check(
+  'the fallback posts the model, one short turn, and no stream',
+  posted.every(
+    (body) =>
+      typeof body.model === 'string' &&
+      body.model !== '' &&
+      Array.isArray(body.messages) &&
+      body.messages.length === 1 &&
+      body.messages[0]?.role === 'user' &&
+      body.messages[0]?.content === 'ping' &&
+      body.stream === false,
+  ),
+  JSON.stringify(posted[0] ?? null),
+)
 
 server.close()
 await rm(home, { recursive: true, force: true })
