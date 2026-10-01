@@ -70,7 +70,7 @@ const port = server.address().port
 // --- a temp home whose profile declares the three routes ---------------------
 
 const realHome = process.env.DSH_HOME || join(homedir(), '.dsh')
-const home = await mkdtemp(join(tmpdir(), 'model-stats-probe-budget-'))
+const home = await mkdtemp(join(tmpdir(), 'model-scorecard-probe-budget-'))
 const profileDir = join(home, 'profiles', 'web')
 await mkdir(join(profileDir, 'node_modules'), { recursive: true })
 await symlink(
@@ -101,7 +101,7 @@ await writeFile(
 )
 
 process.env.DSH_HOME = home
-process.env.DSH_MODEL_STATS_CACHE_DIR = join(home, 'cache')
+process.env.DSH_MODEL_SCORE_CARD_CACHE_DIR = join(home, 'cache')
 
 const http = createHttpProbe({ profile: 'web' })
 

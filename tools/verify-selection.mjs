@@ -25,7 +25,7 @@
 // хост. Сравнение ответа с самим собой ничего бы не проверило.
 //
 // Проверяются обе схемы API: старый GET (совместимость) и новый POST
-// /api/model-stats/query (правила, лимит тела, коды ошибок).
+// /api/model-scorecard/query (правила, лимит тела, коды ошибок).
 //
 // Usage: node tools/verify-selection.mjs
 
@@ -35,7 +35,7 @@ import { join } from 'node:path'
 
 // The snapshot the plugin writes goes to a scratch directory: a verifier must not
 // touch the cache the running harness reads.
-process.env.DSH_MODEL_STATS_CACHE_DIR = mkdtempSync(join(tmpdir(), 'dsh-selection-'))
+process.env.DSH_MODEL_SCORE_CARD_CACHE_DIR = mkdtempSync(join(tmpdir(), 'dsh-selection-'))
 
 const { foldSession } = await import('../lib/fold.js')
 const {
@@ -815,7 +815,23 @@ plugin.apply({
   logger: { info() {}, warn() {} },
 })
 
-check('зарегистрированы оба маршрута', routes.has('/api/model-stats') && routes.has('/api/model-stats/query'), [...routes.keys()].join(' | '))
+check('зарегистрированы оба маршрута', routes.has('/api/model-scorecard') && routes.has('/api/model-scorecard/query'), [...routes.keys()].join(' | '))
+
+// The deprecated namespace is mounted from the same handler objects, not from
+// copies: a copied handler is a second implementation of the same route, and the
+// one thing it must not do is answer a different question than the live path. So
+// the assertion is identity, not presence — and then the answer itself, because
+// identity plus a body that happens to match would still pass a route that
+// ignores the request.
+const legacyRoute = '/api/model-stats/query'
+check('старый префикс /api/model-stats/query смонтирован', routes.has(legacyRoute), [...routes.keys()].join(' | '))
+const legacyHandler = routes.get(legacyRoute)?.handler
+const liveHandler = routes.get('/api/model-scorecard/query')?.handler
+check(
+  'старый и новый путь — один и тот же обработчик',
+  legacyHandler !== undefined && legacyHandler === liveHandler,
+  legacyHandler === liveHandler ? 'один объект обработчика на оба пути' : 'обработчики разошлись',
+)
 
 async function call(path, { method = 'GET', body = null, rawBody = undefined } = {}) {
   const route = routes.get(path.split("?")[0])
@@ -843,7 +859,7 @@ async function call(path, { method = 'GET', body = null, rawBody = undefined } =
   return { status: res.statusCode, json: text === '' ? null : JSON.parse(text) }
 }
 
-const get = await call('/api/model-stats?sort=ttft&limit=200')
+const get = await call('/api/model-scorecard?sort=ttft&limit=200')
 check(
   'GET отвечает без политики выбора',
   get.status === 200 && get.json.selection === null && get.json.coverage === null,
@@ -860,10 +876,10 @@ check(
   String(get.json.catalog?.length),
 )
 
-const noPost = await call('/api/model-stats/query')
+const noPost = await call('/api/model-scorecard/query')
 check('GET на маршрут запроса — 405', noPost.status === 405, String(noPost.status))
 
-const badSelection = await call('/api/model-stats/query', { method: 'POST', body: { selection: 'everything' } })
+const badSelection = await call('/api/model-scorecard/query', { method: 'POST', body: { selection: 'everything' } })
 check('неверный выбор — 400, а не полный список', badSelection.status === 400, JSON.stringify(badSelection.json))
 check(
   'и в теле отказа нет ни одной строки таблицы',
@@ -871,21 +887,21 @@ check(
   JSON.stringify(Object.keys(badSelection.json)),
 )
 
-const badSort = await call('/api/model-stats/query', { method: 'POST', body: { sort: 'nonsense' } })
+const badSort = await call('/api/model-scorecard/query', { method: 'POST', body: { sort: 'nonsense' } })
 check('неизвестная сортировка — 400', badSort.status === 400, JSON.stringify(badSort.json))
-const badLimit = await call('/api/model-stats/query', { method: 'POST', body: { limit: 0 } })
+const badLimit = await call('/api/model-scorecard/query', { method: 'POST', body: { limit: 0 } })
 check('лимит вне диапазона — 400', badLimit.status === 400, JSON.stringify(badLimit.json))
-const badArchived = await call('/api/model-stats/query', { method: 'POST', body: { archived: 'yes' } })
+const badArchived = await call('/api/model-scorecard/query', { method: 'POST', body: { archived: 'yes' } })
 check('не-булево `archived` — 400', badArchived.status === 400, JSON.stringify(badArchived.json))
-const notJson = await call('/api/model-stats/query', { method: 'POST', rawBody: '{not json' })
+const notJson = await call('/api/model-scorecard/query', { method: 'POST', rawBody: '{not json' })
 check('тело не JSON — 400', notJson.status === 400, JSON.stringify(notJson.json))
-const tooBig = await call('/api/model-stats/query', {
+const tooBig = await call('/api/model-scorecard/query', {
   method: 'POST',
   rawBody: `{"selection":{"live":{"pairs":{"${'x'.repeat(1_100_000)}":"on"}}}}`,
 })
 check('тело сверх лимита — 413', tooBig.status === 413, `${tooBig.status} ${JSON.stringify(tooBig.json)}`)
 
-const asked = await call('/api/model-stats/query', {
+const asked = await call('/api/model-scorecard/query', {
   method: 'POST',
   body: {
     sort: 'ttft',
@@ -919,7 +935,7 @@ check(
 // body. A comma in a model id is the case this route exists for: the old question
 // spelled several names with commas, so an id containing one could not be asked for
 // over the address at all.
-const awkward = await call('/api/model-stats/query', {
+const awkward = await call('/api/model-scorecard/query', {
   method: 'POST',
   body: {
     sort: 'ttft',
@@ -937,7 +953,7 @@ check(
   `${awkward.status} ${awkward.json.rows.map((row) => `${row.provider}/${row.model}`).join(' | ')}`,
 )
 
-const absent = await call('/api/model-stats/query', { method: 'POST', body: { sort: 'ttft', limit: 200 } })
+const absent = await call('/api/model-scorecard/query', { method: 'POST', body: { sort: 'ttft', limit: 200 } })
 check(
   'отсутствие выбора — та же семантика, что у GET',
   absent.status === 200 &&
@@ -946,7 +962,7 @@ check(
   `${absent.json.rows.length} строк против ${get.json.rows.length}`,
 )
 
-const sameQuery = await call('/api/model-stats/query', {
+const sameQuery = await call('/api/model-scorecard/query', {
   method: 'POST',
   body: { sort: 'ttft', limit: 200, selection: noneRules },
 })
@@ -956,7 +972,7 @@ check(
   JSON.stringify({ rows: sameQuery.json.rows.length, empty: sameQuery.json.empty }),
 )
 
-const archiveQuery = await call('/api/model-stats/query', {
+const archiveQuery = await call('/api/model-scorecard/query', {
   method: 'POST',
   body: { sort: 'ttft', limit: 200, archived: true, selection: archiveAll },
 })
@@ -968,7 +984,7 @@ check(
   archiveQuery.json.rows.map((row) => `${row.provider}/${row.model}:${row.archived}`).join(' | '),
 )
 
-const withoutFlag = await call('/api/model-stats/query', {
+const withoutFlag = await call('/api/model-scorecard/query', {
   method: 'POST',
   body: { sort: 'ttft', limit: 200, archived: false, selection: archiveAll },
 })
@@ -1098,7 +1114,7 @@ for (const [label, body] of [['обычный запрос панели', panelB
     query.error === undefined && query.selectionRules !== null,
     JSON.stringify(query),
   )
-  const answered = await call('/api/model-stats/query', { method: 'POST', body })
+  const answered = await call('/api/model-scorecard/query', { method: 'POST', body })
   check(`${label} отвечает 200, а не 400`, answered.status === 200, `${answered.status} ${JSON.stringify(answered.json?.error)}`)
 }
 check(

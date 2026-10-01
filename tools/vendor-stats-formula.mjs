@@ -41,7 +41,7 @@ console.log('vendor-stats health formula (one global figure, no per-model view):
 console.log('  avgTtftMs                 :', (ttftMs/ttftSteps).toFixed(0), 'ms  (ttftSteps='+ttftSteps+')')
 console.log('  genTokensPerSec           :', (decodeTokens/(decodeMs/1000)).toFixed(1), 'tok/s')
 console.log('')
-console.log('dsh-model-stats equivalent:')
+console.log('dsh-model-scorecard equivalent:')
 console.log('  avgTtftMs                 :', (myTtft/mySteps).toFixed(0), 'ms  (steps='+mySteps+')')
 console.log('  span-based tok/s          :', (mySpanTokens/(mySpanMs/1000)).toFixed(1), 'tok/s')
 console.log('  inflation factor          :', ((decodeTokens/(decodeMs/1000)) / (mySpanTokens/(mySpanMs/1000))).toFixed(1)+'x')

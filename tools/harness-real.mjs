@@ -36,7 +36,7 @@ const budgetMs = Number.parseInt(argOf('--budget-ms', '120000'), 10)
 
 // The real store is only ever read. The snapshot goes to a temp directory so the
 // user's cache is untouched.
-const cacheDir = await mkdtemp(join(tmpdir(), 'model-stats-harness-'))
+const cacheDir = await mkdtemp(join(tmpdir(), 'model-scorecard-harness-'))
 
 // Mount the plugins the way the composition does, so the engine's optional
 // persistence binding resolves through a real fiber instead of being wired by

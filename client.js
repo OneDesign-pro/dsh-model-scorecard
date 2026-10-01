@@ -1,7 +1,7 @@
-// dsh-model-stats - Client half.
+// dsh-model-scorecard - Client half.
 //
 // A panel on this bundle's page in the Plugins section, over the host's
-// `GET /api/model-stats`. It renders the same
+// `GET /api/model-scorecard`. It renders the same
 // aggregation the `model_stats` tool returns, so what the agent reads and what
 // the human sees cannot drift apart.
 //
@@ -10,7 +10,7 @@
 // panel nobody opens costs no style of its own.
 
 window.__ModuleLoader__.load({
-  id: 'dsh-model-stats',
+  id: 'dsh-model-scorecard',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -84,12 +84,12 @@ window.__ModuleLoader__.load({
     // function, so the panel switches language together with the rest of the GUI,
     // and a language pack can override any key. Without that service — an older
     // host — the built-in Russian copy below keeps the panel complete.
-    const I18N_NS = 'dsh-model-stats'
+    const I18N_NS = 'dsh-model-scorecard'
     const FALLBACK_LOCALE = 'ru'
     // The bundle's package name, and therefore the key `plugins.bundle.config`
     // dispatches on: the Plugins page asks for this bundle's page under the same
     // name the profile installed and the loader row carries.
-    const BUNDLE_NAME = 'dsh-model-stats'
+    const BUNDLE_NAME = 'dsh-model-scorecard'
 
     const MESSAGES = {
       ru: {
@@ -727,7 +727,7 @@ window.__ModuleLoader__.load({
     // store holds four, so they would be evicted by the first clicks anyway. The
     // preference key is deliberately *not* bumped with it: which models the reader
     // picked is their decision and outlives every one of these rewrites.
-    const STORE_KEY = 'dsh-model-stats:v3'
+    const STORE_KEY = 'dsh-model-scorecard:v3'
     const STORE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
     const REFRESH_INTERVAL_MS = 1500
     const MAX_REFRESHES = 20
@@ -1134,8 +1134,16 @@ window.__ModuleLoader__.load({
     // provider except one model". The version lives in the key rather than in a
     // field checked at read time, so each half reads exactly the documents it
     // wrote and never has to guess at an older shape.
-    const PREFS_KEY = 'dsh-model-stats:prefs:v2.selection'
-    const LEGACY_PREFS_KEY = 'dsh-model-stats:prefs:v1'
+    const PREFS_KEY = 'dsh-model-scorecard:prefs:v2.selection'
+    const LEGACY_PREFS_KEY = 'dsh-model-scorecard:prefs:v1'
+    // The same two documents under the name this plugin had before 2026-10-01,
+    // read in order and never written again. The namespace moved with the
+    // package, and the preference it holds is the reader's own work — a sort, a
+    // column set, a rule about which models the table is about — so leaving it
+    // behind would open the panel on a table nobody chose. Nothing is deleted
+    // either: a reader who rolls the plugin back must find what they left, and a
+    // key this panel can still read is cheaper to keep than to explain.
+    const RENAMED_PREFS_KEYS = ['dsh-model-stats:prefs:v2.selection', 'dsh-model-stats:prefs:v1']
 
     /** One JSON document out of the store, or null. Never throws. */
     function readStoredJson(key) {
@@ -1158,7 +1166,7 @@ window.__ModuleLoader__.load({
     function storageAvailable() {
       if (storageProbe === null) {
         try {
-          const probe = 'dsh-model-stats:probe'
+          const probe = 'dsh-model-scorecard:probe'
           window.localStorage.setItem(probe, '1')
           window.localStorage.removeItem(probe)
           storageProbe = true
@@ -1184,7 +1192,7 @@ window.__ModuleLoader__.load({
     function readPrefs() {
       const stored = readStoredPrefs()
       if (stored !== null) return stored
-      const legacy = storageAvailable() ? readStoredJson(LEGACY_PREFS_KEY) : null
+      const legacy = readLegacyV1()
       const selection = defaultSelectionRules()
       for (const name of normalizeProviders(legacy?.providers)) selection.live.providers[name] = 'all'
       const migrated = {
@@ -1204,9 +1212,45 @@ window.__ModuleLoader__.load({
       return migrated
     }
 
-    /** A v2 document as this panel reads it, or null when there is not one. */
+    /** A v1 document as this panel reads it, or null when there is not one. */
     function readStoredPrefs() {
       const stored = storageAvailable() ? readStoredJson(PREFS_KEY) : memoryPrefs
+      const document = normalizePrefs(stored)
+      if (document !== null) return document
+      if (!storageAvailable()) return null
+      // Nothing under the current name, so the rename is read once: the first
+      // document that parses under the old keys is adopted and written down
+      // under the new one, and the second is never consulted — a v1 and a v2
+      // document under the old name cannot both exist, and if they somehow did
+      // the newer shape is the one the reader was last looking at.
+      for (const key of RENAMED_PREFS_KEYS) {
+        const renamed = normalizePrefs(readStoredJson(key))
+        if (renamed === null) continue
+        storePrefs(renamed)
+        return renamed
+      }
+      return null
+    }
+
+    /**
+     * The v1 document, from either name, or null.
+     *
+     * `readPrefs` migrates it into the current shape; it is a separate read from
+     * `readStoredPrefs` because the two migrations are different problems — one
+     * moved the namespace, the other moved the document's shape — and a v1 store
+     * under the old name would otherwise be invisible to both.
+     */
+    function readLegacyV1() {
+      if (!storageAvailable()) return null
+      for (const key of [LEGACY_PREFS_KEY, ...RENAMED_PREFS_KEYS]) {
+        const stored = readStoredJson(key)
+        if (stored !== null) return stored
+      }
+      return null
+    }
+
+    /** A stored document, whatever name it was stored under, as this panel reads it. */
+    function normalizePrefs(stored) {
       if (stored === null || stored === undefined || stored.version !== 2) return null
       return {
         version: 2,
@@ -3011,7 +3055,7 @@ window.__ModuleLoader__.load({
           say(t('announce.liveness.started'))
           livePollsRef.current = 0
           try {
-            const response = await fetch('/api/model-stats/liveness/check', {
+            const response = await fetch('/api/model-scorecard/liveness/check', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(options),
@@ -3046,7 +3090,7 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(async () => {
           livePollsRef.current += 1
           try {
-            const response = await fetch('/api/model-stats/liveness', { signal: controller.signal })
+            const response = await fetch('/api/model-scorecard/liveness', { signal: controller.signal })
             if (!response.ok) return
             absorbLiveness(await response.json())
           } catch {
@@ -3094,7 +3138,7 @@ window.__ModuleLoader__.load({
             // asked for an order, not for whatever it would have done on its own.
             // The page size is named for the reason `PAGE_ROWS` gives: a table that
             // lists the configuration cannot be drawn on a host's own idea of a page.
-            const response = await fetch('/api/model-stats/query', {
+            const response = await fetch('/api/model-scorecard/query', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify(

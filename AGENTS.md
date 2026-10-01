@@ -1,4 +1,4 @@
-# AGENTS.md — working agreements for dsh-model-stats
+# AGENTS.md — working agreements for dsh-model-scorecard
 
 Read this before changing anything in this repository.
 
@@ -11,17 +11,26 @@ code comments into Russian to "match" the conversation.
 
 ## What this plugin is
 
-Per-model and per-provider analytics folded from the DSH session event log the
-Harness already writes. It exists to answer one question with data: **which of
-my configured models should I use for this task?**
+A scorecard for every configured `(provider, model)` route, from three sources
+that must not be confused with one another: what the DSH session event log says
+the route delivered here, what its adapter declares about itself
+(`lib/metadata.js`), and whether it answers right now (`lib/liveness.js`, only on
+request). It exists to answer one question with data: **which of my configured
+models should I use for this task?**
 
-Two surfaces, one collector, so they cannot disagree:
+Three surfaces, one collector, so they cannot disagree:
 
 | Surface | File | Consumer |
 |---|---|---|
 | Agent tool `model_stats` | `lib/index.js` → `collect.js` | the model |
-| Panel route `GET /api/model-stats` | `client.js` → `collect.js` | the user |
+| Panel route `GET /api/model-scorecard` | `client.js` → `collect.js` | the user |
 | Liveness tool `model_liveness` | `lib/liveness.js` | the model |
+
+The name moved with the package on 2026-10-01 (`dsh-model-stats` →
+`dsh-model-scorecard`). The old route prefix is still mounted from the same
+handler objects for one release, the old cache directory is renamed rather than
+rebuilt, and the old `localStorage` key is read once — see *Renamed from
+`dsh-model-stats`* in `README.md` before changing any of the four.
 
 `README.md` is the authoritative metric table. A new metric is not done until
 README documents it.

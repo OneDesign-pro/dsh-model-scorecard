@@ -89,8 +89,8 @@ console.log(`     live routes: ${live.map((entry) => entry.id ?? entry).join(', 
 
 // The plugin reads the cache directory from the environment, so the real store
 // is untouched by a test run.
-const cacheDir = await mkdtemp(join(tmpdir(), 'model-stats-liveness-'))
-process.env.DSH_MODEL_STATS_CACHE_DIR = cacheDir
+const cacheDir = await mkdtemp(join(tmpdir(), 'model-scorecard-liveness-'))
+process.env.DSH_MODEL_SCORE_CARD_CACHE_DIR = cacheDir
 
 const registered = []
 const routes = new Map()
@@ -117,7 +117,7 @@ plugin.apply(pluginCtx)
 await new Promise((resolve) => setTimeout(resolve, 150))
 
 check('model_liveness tool registered', registered.some((def) => def.name === 'model_liveness'))
-check('liveness routes registered', routes.has('/api/model-stats/liveness') && routes.has('/api/model-stats/liveness/check'))
+check('liveness routes registered', routes.has('/api/model-scorecard/liveness') && routes.has('/api/model-scorecard/liveness/check'))
 
 // --- a real probe ------------------------------------------------------------
 
@@ -143,7 +143,7 @@ const WALK_DEADLINE_MS = 600000
 
 /** The panel's GET route, called the way the panel calls it. */
 function readLiveness() {
-  const route = routes.get('/api/model-stats/liveness')
+  const route = routes.get('/api/model-scorecard/liveness')
   return new Promise((resolve, reject) => {
     const res = {
       statusCode: 200,

@@ -404,7 +404,7 @@ const describe = (view, n) => {
 const askedFor = (view, n, want) => {
   const request = view.requests[n]
   if (request === undefined) return false
-  if (request.method !== 'POST' || request.url !== '/api/model-stats/query') return false
+  if (request.method !== 'POST' || request.url !== '/api/model-scorecard/query') return false
   const body = sentBody(view, n)
   if (body === null) return false
   const expected = { view: 'model', limit: 200, archived: false, ...want }
@@ -631,23 +631,31 @@ const bySpeed = payload(
  * a case one millisecond from the threshold is a coin toss. Only the panel's clock
  * is frozen; the tool's own fixtures stay on the real one.
  */
-function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPrefs = null, brokenStorage = false, instantDeadline = false, search = '', locale = null, clock = null } = {}) {
+function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPrefs = null, renamedPrefs = null, brokenStorage = false, instantDeadline = false, search = '', locale = null, clock = null } = {}) {
   const store = new Map()
-  if (entries !== null) store.set('dsh-model-stats:v3', JSON.stringify({ entries }))
+  if (entries !== null) store.set('dsh-model-scorecard:v3', JSON.stringify({ entries }))
   // The store the previous build wrote, for the one case that asks what the panel
   // does when it finds one: a v2 entry answers the same question with rows that
   // have no rating in them, and serving it would print a column of dashes off an
   // answer nobody can tell apart from a current one. Never seed both — a panel
   // that found a v3 document would never look at the old key, and a case that
   // seeded both would be testing the other branch.
-  if (legacyStore !== null) store.set('dsh-model-stats:v2', JSON.stringify(legacyStore))
+  if (legacyStore !== null) store.set('dsh-model-scorecard:v2', JSON.stringify(legacyStore))
   // State-machine scenarios exercise every sortable heading. Compact layout
   // has its own assertion below and explicitly opts out of the expanded set.
   // Either a v2 store or the one the previous build wrote — never both: a panel
   // that found a v2 document would never look at the old key, and a case that
   // seeded both would be testing the wrong branch.
-  if (legacyPrefs !== null) store.set('dsh-model-stats:prefs:v1', JSON.stringify(legacyPrefs))
-  else store.set('dsh-model-stats:prefs:v2.selection', JSON.stringify({ version: 2, columnsAll: true, ...prefs }))
+  if (legacyPrefs !== null) store.set('dsh-model-scorecard:prefs:v1', JSON.stringify(legacyPrefs))
+  // The same document under the name the package had before 2026-10-01, for the
+  // one case that asks whether the reader's own sort, column set and selection
+  // survive the namespace moving. Seeded alone: a panel that found the current
+  // key would never read this one, and a case with both would test nothing.
+  if (renamedPrefs !== null) store.set('dsh-model-stats:prefs:v2.selection', JSON.stringify({ version: 2, columnsAll: true, ...renamedPrefs }))
+  // Never both a legacy key and the current one: a panel that finds a document
+  // under the current key never looks at the others, and a case seeding both
+  // would be testing a branch no reader can reach.
+  else if (legacyPrefs === null) store.set('dsh-model-scorecard:prefs:v2.selection', JSON.stringify({ version: 2, columnsAll: true, ...prefs }))
   // A browser that refuses to store anything is a real case on a locked-down
   // profile, and the panel has to work in memory and say so.
   const storage = brokenStorage
@@ -793,7 +801,7 @@ function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPr
   if (definition.name !== 'plugins.bundle.config') {
     throw new Error(`панель зарегистрирована в слоте ${definition.name}`)
   }
-  if (definition.key !== 'dsh-model-stats') {
+  if (definition.key !== 'dsh-model-scorecard') {
     throw new Error(`ключ страницы — ${definition.key}, а не имя пакета`)
   }
   // A view the slot never asks for renders nothing, rather than a second copy of
@@ -1061,9 +1069,9 @@ function barsOf(tree, key) {
   check('и объявляет обратный', ariaSort(tree, 'rating') === 'ascending', String(ariaSort(tree, 'rating')))
   check(
     'порядок рейтинга сохранён в настройках, как любой другой',
-    view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"sort":"rating"') &&
-      view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"asc"'),
-    view.store.get('dsh-model-stats:prefs:v2.selection'),
+    view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"sort":"rating"') &&
+      view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"dir":"asc"'),
+    view.store.get('dsh-model-scorecard:prefs:v2.selection'),
   )
 }
 
@@ -1678,8 +1686,8 @@ console.log('\n--- выбор моделей: дерево ---')
   tree = await first.pump()
   buttonWithText(tree, 'Снять все').props.onClick()
   tree = await first.pump()
-  const stored = JSON.parse(first.store.get('dsh-model-stats:prefs:v2.selection'))
-  check('выбор записан под версионированным ключом с версией', stored.version === 2, first.store.get('dsh-model-stats:prefs:v2.selection'))
+  const stored = JSON.parse(first.store.get('dsh-model-scorecard:prefs:v2.selection'))
+  check('выбор записан под версионированным ключом с версией', stored.version === 2, first.store.get('dsh-model-scorecard:prefs:v2.selection'))
   check(
     'и записанный выбор — правило, а не пары',
     JSON.stringify(stored.selection) === JSON.stringify(rules({ base: 'none' })),
@@ -1712,7 +1720,7 @@ console.log('\n--- выбор моделей: дерево ---')
     }),
     describe(view, 0),
   )
-  check('и записан под новым ключом', JSON.parse(view.store.get('dsh-model-stats:prefs:v2.selection')).version === 2)
+  check('и записан под новым ключом', JSON.parse(view.store.get('dsh-model-scorecard:prefs:v2.selection')).version === 2)
 }
 {
   const view = mountPanel({ legacyPrefs: { providers: [] } })
@@ -1722,6 +1730,23 @@ console.log('\n--- выбор моделей: дерево ---')
     askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: DEFAULT_SELECTION }),
     describe(view, 0),
   )
+}
+{
+  // The package rename moved the `localStorage` key with it. The document under
+  // the old key is the reader's own work — a sort, a column set, a rule about
+  // which models the table is about — so it is adopted once and written down
+  // under the new key, and the old key is left where it is: a reader who rolls
+  // the plugin back must find what they left.
+  const view = mountPanel({ renamedPrefs: { sort: 'speed', view: 'provider', selection: rules({ providers: { codex: 'none' } }) } })
+  view.render()
+  check(
+    'состояние панели из старого пространства имён применено',
+    askedFor(view, 0, { sort: 'speed', dir: 'desc', view: 'provider', selection: rules({ providers: { codex: 'none' } }) }),
+    describe(view, 0),
+  )
+  const adopted = JSON.parse(view.store.get('dsh-model-scorecard:prefs:v2.selection'))
+  check('и переписано под текущим ключом', adopted.sort === 'speed' && adopted.view === 'provider', JSON.stringify(adopted.selection))
+  check('старый ключ остался на месте', view.store.get('dsh-model-stats:prefs:v2.selection') !== null)
 }
 {
   // A corrupt rule document is not a question: only a document this panel can read
@@ -1766,10 +1791,10 @@ console.log('\n--- выбор моделей: дерево ---')
   )
   view.requests[0].answer(byTtft)
   tree = await view.pump()
-  check('а ответ записан уже под новым ключом', Object.keys(JSON.parse(view.store.get('dsh-model-stats:v3')).entries).length === 1)
+  check('а ответ записан уже под новым ключом', Object.keys(JSON.parse(view.store.get('dsh-model-scorecard:v3')).entries).length === 1)
   check(
     'и старый документ панель не переписала',
-    JSON.parse(view.store.get('dsh-model-stats:v2')).entries !== undefined,
+    JSON.parse(view.store.get('dsh-model-scorecard:v2')).entries !== undefined,
   )
 }
 
@@ -1874,8 +1899,8 @@ const withArchive = (rows, archive) => payload('ttft', rows, { providerList: PRO
   check('подвал не считает архив скрытым, когда он показан', !text(tree).includes('в архиве:'), text(tree).match(/в архиве[^·]*/)?.[0])
   check(
     'отметка записана в настройки панели',
-    JSON.parse(view.store.get('dsh-model-stats:prefs:v2.selection')).archived === true,
-    view.store.get('dsh-model-stats:prefs:v2.selection'),
+    JSON.parse(view.store.get('dsh-model-scorecard:prefs:v2.selection')).archived === true,
+    view.store.get('dsh-model-scorecard:prefs:v2.selection'),
   )
   // The question is no longer written into the address: a selection is a rule
   // document, and a rule document in a query string is either truncated or visible
@@ -1884,8 +1909,8 @@ const withArchive = (rows, archive) => payload('ttft', rows, { providerList: PRO
   check('панель не трогает адрес', view.addresses.length === 0, view.addresses.join(' | ') || '(адрес не менялся)')
   check(
     'и кэш — под своим ключом, а не под ключом таблицы без архива',
-    Object.keys(JSON.parse(view.store.get('dsh-model-stats:v3')).entries).some((key) => key.endsWith('|archive')),
-    Object.keys(JSON.parse(view.store.get('dsh-model-stats:v3')).entries).join(' | '),
+    Object.keys(JSON.parse(view.store.get('dsh-model-scorecard:v3')).entries).some((key) => key.endsWith('|archive')),
+    Object.keys(JSON.parse(view.store.get('dsh-model-scorecard:v3')).entries).join(' | '),
   )
 
   archiveCheck(tree).props.onChange({})
@@ -1966,8 +1991,8 @@ for (const [label, answer] of [
   )
   check(
     'и записан в настройки',
-    JSON.stringify(JSON.parse(view.store.get('dsh-model-stats:prefs:v2.selection')).selection) === JSON.stringify(DEFAULT_SELECTION),
-    view.store.get('dsh-model-stats:prefs:v2.selection'),
+    JSON.stringify(JSON.parse(view.store.get('dsh-model-scorecard:prefs:v2.selection')).selection) === JSON.stringify(DEFAULT_SELECTION),
+    view.store.get('dsh-model-scorecard:prefs:v2.selection'),
   )
 }
 
@@ -2460,7 +2485,7 @@ console.log('\n--- сортировка по клику на заголовок 
   )
   check('колонка шагов получила aria-sort=descending', ariaSort(tree, 'steps') === 'descending')
   check('колонка отклика вернулась в aria-sort=none', ariaSort(tree, 'ttft') === 'none')
-  check('в настройках сохранён порядок steps.desc', view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"sort":"steps"') && view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"desc"'))
+  check('в настройках сохранён порядок steps.desc', view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"sort":"steps"') && view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"dir":"desc"'))
 
   // Click on "steps" heading again to flip direction
   sortButton(tree, 'steps').props.onClick()
@@ -2472,7 +2497,7 @@ console.log('\n--- сортировка по клику на заголовок 
     describe(view, 2),
   )
   check('колонка шагов получила aria-sort=ascending', ariaSort(tree, 'steps') === 'ascending')
-  check('в настройках сохранён порядок steps.asc', view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"asc"'))
+  check('в настройках сохранён порядок steps.asc', view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"dir":"asc"'))
 }
 
 {
@@ -2597,8 +2622,8 @@ console.log('\n--- сортировка по клику на заголовок 
   check('колонка статуса получила aria-sort=descending', ariaSort(tree, 'liveness') === 'descending')
   check(
     'в настройках сохранён порядок liveness.desc',
-    view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"sort":"liveness"') &&
-      view.store.get('dsh-model-stats:prefs:v2.selection')?.includes('"dir":"desc"'),
+    view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"sort":"liveness"') &&
+      view.store.get('dsh-model-scorecard:prefs:v2.selection')?.includes('"dir":"desc"'),
   )
 
   sortButton(tree, 'liveness').props.onClick()
@@ -2772,8 +2797,8 @@ console.log('--- живость: что кружок имеет право ут�
   circle.props.onClick()
   await view.pump()
 
-  const post = view.requests.find((entry) => entry.method === 'POST' && entry.url === '/api/model-stats/liveness/check')
-  check('клик по кружку отправляет POST на маршрут проверки', post?.url === '/api/model-stats/liveness/check', post?.url)
+  const post = view.requests.find((entry) => entry.method === 'POST' && entry.url === '/api/model-scorecard/liveness/check')
+  check('клик по кружку отправляет POST на маршрут проверки', post?.url === '/api/model-scorecard/liveness/check', post?.url)
   check(
     'клик проверяет одну модель, а не весь каталог',
     post?.body?.provider === 'openrouter' && post?.body?.model === 'glm-5.3-flash' && post?.body?.all !== true,
@@ -2812,7 +2837,7 @@ console.log('--- живость: что кружок имеет право ут�
   selected.props.onClick()
   await view.pump()
   const chosen = view.requests
-    .filter((entry) => entry.method === 'POST' && entry.url === '/api/model-stats/liveness/check')
+    .filter((entry) => entry.method === 'POST' && entry.url === '/api/model-scorecard/liveness/check')
     .at(-1)
   const sentPairs = chosen?.body?.pairs
   check(
@@ -3145,7 +3170,7 @@ console.log('--- конец проверки: «проверяю…» не пе�
   let tree = await view.pump()
 
   const dotState = (node) => nodesWhere(node, (entry) => entry.props?.className === 'dsh-ms-live-dot')[0]?.props['data-state']
-  const tableGets = () => view.requests.filter((entry) => entry.method === 'POST' && entry.url === '/api/model-stats/query')
+  const tableGets = () => view.requests.filter((entry) => entry.method === 'POST' && entry.url === '/api/model-scorecard/query')
   check('строка, помеченная хостом как проверяемая, нарисована «проверяю…»', dotState(tree) === 'checking', dotState(tree))
 
   // The sweep the flag came from: the host answers at once and keeps working, so
@@ -3153,7 +3178,7 @@ console.log('--- конец проверки: «проверяю…» не пе�
   const sweep = nodesWhere(tree, (node) => node.type === 'button').find((node) => textOf(node) === 'Проверить все')
   sweep.props.onClick()
   await view.pump()
-  const post = view.requests.find((entry) => entry.method === 'POST' && entry.url.startsWith('/api/model-stats/liveness'))
+  const post = view.requests.find((entry) => entry.method === 'POST' && entry.url.startsWith('/api/model-scorecard/liveness'))
   check('кнопка проверки отправила запрос', post !== undefined)
   post.answer({ ok: true, running: true, total: 1, done: 0, pending: 1, checking: ['openrouter\u0000glm-5.3-flash'], results: [] })
   tree = await view.pump()
@@ -3162,7 +3187,7 @@ console.log('--- конец проверки: «проверяю…» не пе�
   // the poll is how the browser hears about it.
   await new Promise((resolve) => setTimeout(resolve, 1300))
   await view.pump()
-  const poll = view.requests.filter((entry) => entry.url === '/api/model-stats/liveness').at(-1)
+  const poll = view.requests.filter((entry) => entry.url === '/api/model-scorecard/liveness').at(-1)
   check('панель спросила хост о ходе проверки', poll !== undefined)
 
   const before = tableGets().length

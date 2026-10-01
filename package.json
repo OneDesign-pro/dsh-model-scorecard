@@ -1,9 +1,9 @@
 {
-  "name": "dsh-model-stats",
-  "version": "0.2.0",
+  "name": "dsh-model-scorecard",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Per-model and per-provider speed/stability analytics folded from DSH session history, with zero runtime dependencies.",
+  "description": "A scorecard for every configured (provider, model) route: measured speed and stability folded from DSH session history, a 0-100 technical rating, the on-demand check of whether a route answers right now, and what the adapter declares about itself. Zero runtime dependencies.",
   "icon": "icon.svg",
   "main": "lib/index.js",
   "exports": {

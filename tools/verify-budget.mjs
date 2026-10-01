@@ -148,7 +148,7 @@ function check(label, condition, detail) {
   console.log(`${mark} ${label}${detail ? ` — ${detail}` : ''}`)
 }
 
-const cacheDir = await mkdtemp(join(tmpdir(), 'model-stats-contract-'))
+const cacheDir = await mkdtemp(join(tmpdir(), 'model-scorecard-contract-'))
 
 console.log(`синтетический корпус: ${SESSIONS} сессий, ${PER_SESSION_MS} мс на чтение`)
 console.log(`полный проход без бюджета занял бы ~${(SESSIONS * PER_SESSION_MS) / 1000} с\n`)

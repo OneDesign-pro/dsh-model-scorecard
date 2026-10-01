@@ -555,8 +555,8 @@ check('ни одного необработанного отказа за вес
 
 console.log('\n--- маршруты панели: GET и POST обогащаются одним и тем же помощником ---')
 
-const cacheDir = await mkdtemp(join(tmpdir(), 'model-stats-metadata-'))
-process.env.DSH_MODEL_STATS_CACHE_DIR = cacheDir
+const cacheDir = await mkdtemp(join(tmpdir(), 'model-scorecard-metadata-'))
+process.env.DSH_MODEL_SCORE_CARD_CACHE_DIR = cacheDir
 
 const CATALOG = [
   { provider: 'p-live', model: 'm-live' },
@@ -635,7 +635,7 @@ const wired = pluginContext(routeLlm)
 apply(wired.ctx)
 await sleep(50)
 
-const getAnswer = await callRoute(wired.routes, '/api/model-stats')
+const getAnswer = await callRoute(wired.routes, '/api/model-scorecard')
 check(
   'GET отвечает 200 и обогащает строки конфигурации',
   getAnswer.status === 200 &&
@@ -651,14 +651,14 @@ check(
   `${rmOf(getAnswer.json, 'p-live', 'm-throws')} / ${rmOf(getAnswer.json, 'p-live', 'm-live')?.contextWindow}`,
 )
 
-const getAgain = await callRoute(wired.routes, '/api/model-stats')
+const getAgain = await callRoute(wired.routes, '/api/model-scorecard')
 check(
   'второй GET отвечает из кэша метаданных',
   routeLlm.calls.resolveModelInfo === 2 && rmOf(getAgain.json, 'p-live', 'm-live')?.contextWindow === 987_654,
   String(routeLlm.calls.resolveModelInfo),
 )
 
-const postAnswer = await callRoute(wired.routes, '/api/model-stats/query', {
+const postAnswer = await callRoute(wired.routes, '/api/model-scorecard/query', {
   method: 'POST',
   body: { sort: 'rating', limit: 10 },
 })
@@ -692,7 +692,7 @@ const catalogOnly = {
 const withoutMetadata = pluginContext(catalogOnly)
 apply(withoutMetadata.ctx)
 await sleep(50)
-const oldHostAnswer = await callRoute(withoutMetadata.routes, '/api/model-stats')
+const oldHostAnswer = await callRoute(withoutMetadata.routes, '/api/model-scorecard')
 check(
   'хост без resolveModelInfo отдаёт строки с unknown, а не 500',
   oldHostAnswer.status === 200 &&

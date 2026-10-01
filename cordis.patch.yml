@@ -1,4 +1,4 @@
 - insert:
-    - id: model-stats
-      name: dsh-model-stats
+    - id: model-scorecard
+      name: dsh-model-scorecard
       config: {}

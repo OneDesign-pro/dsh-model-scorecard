@@ -1,4 +1,4 @@
-# dsh-usage-vendor-stats vs dsh-model-stats
+# dsh-usage-vendor-stats vs dsh-model-scorecard
 
 Comparison run on the same real history: **78 session logs, 55 112 events,
 8 229 timed steps, 9 providers, 20 model identities** (cached, 27 Sept 2026).
@@ -8,7 +8,7 @@ installed as the secondary on-demand probe.
 
 ## 1. Metric coverage
 
-| Metric | dsh-usage-vendor-stats 0.2.0 | dsh-model-stats 0.1.0 |
+| Metric | dsh-usage-vendor-stats 0.2.0 | dsh-model-scorecard 0.1.0 |
 |---|---|---|
 | Columnar tokens by vendor → model | yes | yes |
 | Heatmap / trends / CSV | yes | no |
@@ -27,7 +27,7 @@ once for the entire installation. `errorsByVendor` is the only health figure tha
 is broken down at all. So "which model responds faster?" is not answerable from
 its health card.
 
-`dsh-model-stats` never produces a blended figure: every row keys on
+`dsh-model-scorecard` never produces a blended figure: every row keys on
 `message.source.{provider,model}`.
 
 ## 2. Throughput correctness
@@ -43,7 +43,7 @@ loop that interval also contains harness work between the last streamed token an
 message assembly, so it is the weaker of the two bases — but only for the steps
 that actually had such work, and for most models that is almost none.
 
-`dsh-model-stats` reconstructs token arrival times from the recorded delta runs
+`dsh-model-scorecard` reconstructs token arrival times from the recorded delta runs
 (`time0` + accumulated `dt`) and measures over the span the provider was
 actually streaming. Re-measured on the same history with the corrected
 numerator, decode-based vs streaming-span-based tok/s:
@@ -71,11 +71,11 @@ A span counts only when it carries ≥ 100 ms, ≥ 8 tokens and ≥ 4 fragments,
 
 ## 3. Correctness of the shared metrics
 
-`dsh-model-stats` reproduces the official `sessionStats` fold exactly. Verified
+`dsh-model-scorecard` reproduces the official `sessionStats` fold exactly. Verified
 field-by-field against the projection unit itself
 (`@deepseek-ai/dsh-session-stats`) on one real session log:
 
-| field | official | dsh-model-stats | diff |
+| field | official | dsh-model-scorecard | diff |
 |---|---|---|---|
 | `llmMs` | 67 225 | 67 225 | 0 |
 | `ttftMs` | 32 541 | 32 541 | 0 |
@@ -89,7 +89,7 @@ message, because a step that assembled no message carries no timing to report.
 
 ## 4. Load on the Harness
 
-| | dsh-usage-vendor-stats | dsh-model-stats |
+| | dsh-usage-vendor-stats | dsh-model-scorecard |
 |---|---|---|
 | Hook on the request/stream path | none | none |
 | Background timers | none (backfill once at boot) | none |
@@ -102,14 +102,14 @@ message, because a step that assembled no message carries no timing to report.
 
 Both honour the "minimal overhead" requirement: neither instruments the stream.
 The difference is that `dsh-usage-vendor-stats` re-folds the official projection
-over session events, while `dsh-model-stats` folds the raw events directly in one
+over session events, while `dsh-model-scorecard` folds the raw events directly in one
 pass — which is what lets it attribute every figure to a model.
 
 ## 5. Verdict
 
 - **Keep `dsh-usage-vendor-stats` for the token/cache/cost dashboard** — heatmap,
   trends, monthly rollups and CSV are real value there.
-- **Use `dsh-model-stats` for the decision "what should I run this on"** — it is
+- **Use `dsh-model-scorecard` for the decision "what should I run this on"** — it is
   the only one of the two that can answer it, and the only one whose throughput
   figure survives contact with the data.
 - **Ignore the health card of `dsh-usage-vendor-stats`** for model selection: the

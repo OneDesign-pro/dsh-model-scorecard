@@ -41,8 +41,8 @@ import { join } from 'node:path'
 // Both the fold snapshot and the probe store live under one directory, so the
 // real `apply()` below - which persists both - writes into a temp directory and
 // never into the user's cache.
-const cacheDir = await mkdtemp(join(tmpdir(), 'model-stats-rating-paths-'))
-process.env.DSH_MODEL_STATS_CACHE_DIR = cacheDir
+const cacheDir = await mkdtemp(join(tmpdir(), 'model-scorecard-rating-paths-'))
+process.env.DSH_MODEL_SCORE_CARD_CACHE_DIR = cacheDir
 
 const DAY = 86_400_000
 const NEW_BASE = 1_800_000_000_000
@@ -575,10 +575,10 @@ const getJson = async (url) => {
       body = chunk
     },
   }
-  await routes.get('/api/model-stats')({ url, method: 'GET' }, res)
+  await routes.get('/api/model-scorecard')({ url, method: 'GET' }, res)
   return { status: res.statusCode, json: JSON.parse(body) }
 }
-const scopedGet = await getJson(`/api/model-stats?sort=rating&sinceMs=${SINCE}&limit=10`)
+const scopedGet = await getJson(`/api/model-scorecard?sort=rating&sinceMs=${SINCE}&limit=10`)
 check(
   'панельный GET принимает rating и называет область, а не молчит о ней',
   scopedGet.status === 200 &&
@@ -593,14 +593,14 @@ check(
   scopedGet.json.rows.find((row) => row.model === 'fast')?.rating?.score === scopedRating.score,
   `${scopedGet.json.rows.find((row) => row.model === 'fast')?.rating?.score} против ${scopedRating.score}`,
 )
-const plainGet = await getJson('/api/model-stats?sort=rating&limit=10')
+const plainGet = await getJson('/api/model-scorecard?sort=rating&limit=10')
 check(
   'без области панель говорит «вся история» и отдаёт полное число',
   plainGet.json.sinceMs === null &&
     plainGet.json.rows.find((row) => row.model === 'fast')?.rating?.score === coldRating.score,
   `sinceMs=${plainGet.json.sinceMs}, score=${plainGet.json.rows.find((row) => row.model === 'fast')?.rating?.score}`,
 )
-const providerGet = await getJson('/api/model-stats?sort=rating&view=provider&limit=10')
+const providerGet = await getJson('/api/model-scorecard?sort=rating&view=provider&limit=10')
 check(
   'провайдерский вид панели отвечает `pair_only` и не выдумывает оценку',
   providerGet.status === 200 &&

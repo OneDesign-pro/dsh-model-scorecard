@@ -83,7 +83,7 @@ console.log('registered routes:', [...routes.keys()])
 
 // --- exercise the panel route through a fake req/res -----------------------------
 async function callRoute(path) {
-  const route = routes.get('/api/model-stats')
+  const route = routes.get('/api/model-scorecard')
   if (route === undefined) throw new Error('route not registered')
   let body = ''
   const res = {
@@ -133,10 +133,10 @@ console.log(`два самых занятых провайдера: ${first}, ${
 const byList = await tool.execute({ provider: `${first},${second}`, view: 'provider', sort: 'steps' })
 const byArray = await tool.execute({ provider: [first, second], view: 'provider', sort: 'steps' })
 const byRepeated = await callRoute(
-  `/api/model-stats?sort=steps&view=provider&provider=${first}&provider=${second}&limit=50`,
+  `/api/model-scorecard?sort=steps&view=provider&provider=${first}&provider=${second}&limit=50`,
 )
 const byJoined = await callRoute(
-  `/api/model-stats?sort=steps&view=provider&provider=${encodeURIComponent(`${first},${second}`)}&limit=50`,
+  `/api/model-scorecard?sort=steps&view=provider&provider=${encodeURIComponent(`${first},${second}`)}&limit=50`,
 )
 const listed = [...byList.matchAll(/^(\S+)\s+\d+\s+\d+/gm)].map(([match]) => match)
 console.log('[tool, строка] ', listed.join(' | '))
@@ -151,8 +151,8 @@ console.log(
 console.log('[панель предлагает провайдеров]', byRepeated.json.providerList.length, 'из', byRepeated.json.totals.providers)
 console.log('[после фильтра]', JSON.stringify(byRepeated.json.shown), '| применён:', byRepeated.json.providers.join('+'))
 
-console.log('\n=== panel route GET /api/model-stats ===')
-const panel = await callRoute('/api/model-stats?sort=ttft&view=model&limit=3')
+console.log('\n=== panel route GET /api/model-scorecard ===')
+const panel = await callRoute('/api/model-scorecard?sort=ttft&view=model&limit=3')
 console.log('status', panel.status, '| ok', panel.json.ok, '| rows', panel.json.rows.length)
 console.log('totals', JSON.stringify(panel.json.totals))
 for (const row of panel.json.rows) {
@@ -163,14 +163,14 @@ for (const row of panel.json.rows) {
       ` conf=${row.speedConfidence === null ? '-' : Math.round(row.speedConfidence * 100) + '%'}`,
   )
 }
-const bad = await callRoute('/api/model-stats?sort=bogus&limit=9999')
+const bad = await callRoute('/api/model-scorecard?sort=bogus&limit=9999')
 console.log('fuzz (bad sort, huge limit):', 'status', bad.status, '| sort ->', bad.json.sort, '| rows', bad.json.rows.length)
 
 // The one order the fold cannot read off the session log: the status column's
 // verdict is a probe's, so the route reads the probe store and hands the rank in.
 console.log('\n=== порядок по статусу ===')
-const byStatus = await callRoute('/api/model-stats?sort=liveness&dir=desc&view=model&limit=20')
-const byStatusAsc = await callRoute('/api/model-stats?sort=liveness&dir=asc&view=model&limit=20')
+const byStatus = await callRoute('/api/model-scorecard?sort=liveness&dir=desc&view=model&limit=20')
+const byStatusAsc = await callRoute('/api/model-scorecard?sort=liveness&dir=asc&view=model&limit=20')
 const show = (answer) =>
   answer.json.rows
     .map((row) => `${row.model ?? '(provider)'} ${row.liveness?.state ?? 'unknown'}`)
