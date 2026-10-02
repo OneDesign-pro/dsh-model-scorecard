@@ -332,10 +332,10 @@ provisional.
 
 | model | rating | steps | qualified / answered | rating sessions | what the cell says |
 |---|---|---|---|---|---|
-| tokenator/deepseek-v4.1-flash | **78.0~** | 15 | 14 / 15 | 1 | `~` — one session is under the 3-session floor |
+| tokenator/deepseek-v4.1-flash | **~78.0** | 15 | 14 / 15 | 1 | `~` — one session is under the 3-session floor |
 | deepseek-official/deepseek-flash | **75.5** | 9946 | 9501 / 9946 | 84 | — |
 | openrouter/stealth/space-bunny-alpha | **70.0** | 2371 | 1968 / 2371 | 20 | — |
-| limitdeckai2/glm-5.3-flash | **53.1~** | 648 | 21 / 648 (3.2%) | 8 | `~` — 3.2% of its steps qualify; 21.0 effective |
+| limitdeckai2/glm-5.3-flash | **~53.1** | 648 | 21 / 648 (3.2%) | 8 | `~` — 3.2% of its steps qualify; 21.0 effective |
 | clinebot/typesafe/jev-router | — | 3 | 3 / 3 | 1 | no score: 3 of 10 qualified samples needed |
 
 Sorted by steps, the table leads with `deepseek-official/deepseek-flash` (9946
@@ -396,22 +396,25 @@ Two surfaces, one collector, so they can never disagree:
    model answering now*). The **рейтинг** column stands third, next to the status
    it pairs with: those two are the whole answer to "which of these should I
    use", and every other figure in the row is the evidence behind them. By
-   default the table is six columns wide — name, status, rating, steps, median
-   response time and median end-to-end throughput (`tok/s e2e med`, including
-   the first-token wait) — and it was six before the rating existed: `ош./100`
-   moved behind «все метрики» to pay for it, because a rate of errors per 100
-   steps is a diagnostic to consult, while a score that already folds throughput
-   and latency together is what a route is picked by. Streaming throughput,
-   absolute errors and the rest of the twenty-one columns stay one click away.
-   Errors per 100 steps normalize activity, not task difficulty or blame, and
-   neither they nor the rating measure answer quality.
+   default the table is seven columns wide — name, status, rating, steps, median
+   response time, median end-to-end throughput (`tok/s e2e med`, including the
+   first-token wait) and errors per 100 steps (`ош./100`). The error rate was
+   moved behind «все метрики» to pay for the rating column and came back when
+   the table turned out to have room for both: a score that folds throughput and
+   latency together and the one rate that says whether a route finishes what it
+   starts are read side by side, not chosen between. Streaming throughput, the
+   absolute error counts and the rest of the fourteen remaining columns stay one
+   click away. Errors per 100 steps normalize activity, not task difficulty or
+   blame, and neither they nor the rating measure answer quality.
 
    The rating is drawn with one decimal, **no bar and no tone**. A bar is a
    share of the largest value in its column, and this figure is already 0-100 on
    its own scale, so a bar would say "best of five" where the number says
    something else; green and red in this panel mean "best and worst value in the
    table", and a rating may not be graded by the company it keeps. A `~` or a `*`
-   rides in the cell after the number (see *The rating*), and the cell's tooltip
+   leads the number in the cell (see *The rating*): the column is read down the
+   right edge of its digits, and a mark printed after the figure would move that
+   edge on the marked rows alone. The cell's tooltip
    and its screen-reader sentence are one string — which is how a `-`, standing
    for four different reasons, stays readable without a mouse.
 
@@ -430,7 +433,7 @@ Two surfaces, one collector, so they can never disagree:
    then duration and input diagnostics. Thin dividers mark the groups without
    another sticky header.
    Under the three rate medians — response, `tok/s e2e med` and `ош./100`, all
-   three of them in the expanded set now — every
+   three of them in the short set now — every
    figure carries a hairline bar: its share of the largest value in that column, so
    a column can be read down the page without reading the digits. Which columns are
    scaled is the `SCALED` map in `client.js`: a cell draws a bar only for a metric
@@ -449,7 +452,7 @@ Two surfaces, one collector, so they can never disagree:
    so it reaches a screen reader too; the legend that spells all of this out sits
    folded under the table. Its first half is read whichever columns are open: the
    rating's `~` and `*` are defined there, out of the very two dictionary keys the
-   cell's own tooltip prints, because the rating is one of the six compact columns
+   cell's own tooltip prints, because the rating is one of the seven compact columns
    and a glyph the table prints must not be one the legend defines only behind a
    button the reader never pressed. The last answer is kept in the browser, so reopening
    the panel paints the table first and refreshes behind it, and the chosen sort,
@@ -1381,9 +1384,9 @@ the fastest decode, and every model that produced errors.
   changes which model is the fastest.
 - `sort: "rating"` orders by the technical score and puts the unrated rows at
   the bottom in both directions, like every other missing figure. The `~` and `*`
-  marks ride in the cell, and the line under the table names both what they
-  mean and which rows carry them; a `-` is one of four reasons, counted in that
-  same line (`no_samples`, `no_qualified_samples`, `insufficient_samples`,
+  marks lead the figure in the cell, and the line under the table names both what
+  they mean and which rows carry them; a `-` is one of four reasons, counted in
+  that same line (`no_samples`, `no_qualified_samples`, `insufficient_samples`,
   `pair_only`).
 - The rating is not answer quality, not price and not reachability, and a `*`
   on it does not lower it: the mark says the evidence is old, and the number is

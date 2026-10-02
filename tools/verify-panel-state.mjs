@@ -227,15 +227,31 @@ const hasTable = (tree) => nodesWhere(tree, (node) => node.type === 'table').len
 
 /** The text a sighted reader sees in one cell: the hidden sentences are dropped.
  *
+ * The walk is in document order — a node's own text children interleaved with the
+ * text inside its element children — because the rating cell mixes the two: the
+ * mark is an element and the figure is a bare string. A pre-order walk that
+ * emitted a node's strings before descending into its children printed «72,2 ~»
+ * for a cell that renders «~ 72,2», so it could not tell the two orders apart —
+ * which is the one thing a check about this column has to be able to see.
+ *
  * `columnCells` keeps the screen-reader text because most assertions want the
  * whole cell; the rating column is the one that carries a paragraph in a hidden
  * span, and a check about the printed figure has to read the figure. */
 const visibleText = (node) => {
   const parts = []
-  walk(node, (n) => {
+  const collect = (n) => {
+    if (n === null || n === undefined || typeof n !== 'object') return
+    if (Array.isArray(n)) {
+      for (const child of n) collect(child)
+      return
+    }
     if (String(n.props?.className ?? '').includes('dsh-ms-sr-only')) return
-    for (const child of n.props?.children ?? []) if (typeof child === 'string') parts.push(child)
-  })
+    for (const child of n.props?.children ?? []) {
+      if (typeof child === 'string' || typeof child === 'number') parts.push(String(child))
+      else collect(child)
+    }
+  }
+  collect(node)
   return parts.join(' ').replace(/\s+/g, ' ').trim()
 }
 
@@ -846,19 +862,38 @@ function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPr
 
 console.log('--- краткий набор и группы ---')
 {
-  // The compact set is still six columns wide: the rating pays for itself out of
-  // «ош./100», which moves to the expanded set rather than the table growing a
-  // seventh column. Written out as a list, not as a count, because the count is
-  // what stays true while a column the reader never asked for replaces one they
-  // did.
+  // The compact set is seven columns wide. The rating was once paid for out of
+  // «ош./100», which went behind «все метрики»; the reader's own verdict was that
+  // the column had come back, a table that fits not owing a narrower one. Written
+  // out as a list, not as a count, because the count is what stays true while a
+  // column the reader never asked for replaces one they did.
   const view = mountPanel({ prefs: { columnsAll: false } })
   await view.pump()
   view.requests[0].answer(byTtft)
   const tree = await view.pump()
-  check('краткий вид: статус, рейтинг, отклик и e2e',
-    headings(tree).map((th) => th.props.key).join(',') === 'name,liveness,rating,steps,ttft,e2e',
+  check('краткий вид: статус, рейтинг, отклик, e2e и ош./100',
+    headings(tree).map((th) => th.props.key).join(',') === 'name,liveness,rating,steps,ttft,e2e,errorRate',
     headings(tree).map((th) => th.props.key).join(','))
-  check('и ошибок на 100 шагов в нём больше нет', !headingFor(tree, 'errorRate'))
+  // The compact set is a subset of the groups, not a group of its own: `ош./100`
+  // shares its group with three error counts and `tok/s e2e med` shares its with
+  // three throughput columns, so "one column of a group came back" must not drag
+  // its neighbours out from behind the button with it.
+  check('а соседи по группе остались за кнопкой', !headingFor(tree, 'tps') && !headingFor(tree, 'errors'))
+
+  // The column draws its bar in the short set too — the bar is what makes a rate
+  // readable down the page, and a scale that appears only after the reader presses
+  // the button is a scale they have already looked past.
+  const measured = payload('ttft', [
+    row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, errorRate: 8 }),
+    row('local-uns', 'Ornith-9B', { steps: 28, ttftMedian: 46, errorRate: 2 }),
+  ], { providerList: PROVIDER_LIST })
+  const bars = mountPanel({ prefs: { columnsAll: false } })
+  await bars.pump()
+  bars.requests[0].answer(measured)
+  const withBars = await bars.pump()
+  check('и полоска под ош./100 рисуется в кратком виде',
+    barsOf(withBars, 'errorRate').join(',') === '100%,25%',
+    JSON.stringify(barsOf(withBars, 'errorRate')))
 }
 
 // --- рейтинг: колонка, причина «-» и «Подробнее» -------------------------------
@@ -930,13 +965,16 @@ function barsOf(tree, key) {
 
   // 72.23415362384071 through `Intl.NumberFormat('ru', {1,1})` is «72,2»; the raw
   // value would have been «72.2», and the guide's own fixture calls for one digit.
-  check('рейтинг нарисован с одним знаком через форматтер панели', printed[0] === '72,2 ~', JSON.stringify(printed[0]))
+  // The mark is printed before the figure, so a marked row's digits end in the
+  // same column as an unmarked row's: this is the assertion that pins the order,
+  // and it moved with the cell for that reason.
+  check('рейтинг нарисован с одним знаком через форматтер панели', printed[0] === '~ 72,2', JSON.stringify(printed[0]))
   check('оценка без пометки — просто число', printed[1] === '48,5', JSON.stringify(printed[1]))
   check('нет рейтинга — прочерк, а не ноль', printed[2] === '-', JSON.stringify(printed[2]))
   // Forty days is past the 30 the formula's half-life uses, so the score is kept
   // and the age is marked: no freshness multiplier touches it (the host asserts
   // that side), and the reader is told the number describes the past.
-  check('старый замер помечен, а оценка осталась', printed[3] === '61,0 *', JSON.stringify(printed[3]))
+  check('старый замер помечен, а оценка осталась', printed[3] === '* 61,0', JSON.stringify(printed[3]))
   check(
     'и подсказка к старому замеру объясняет пометку',
     textOf(bodyRows(tree)[3]).includes('самому новому подходящему замеру больше 30 дней'),
@@ -1001,7 +1039,7 @@ function barsOf(tree, key) {
     onBoundary === '61,0',
     onBoundary,
   )
-  check('а на миллисекунду старше — помечен, и оценка та же', oneMsOver === '61,0 *', oneMsOver)
+  check('а на миллисекунду старше — помечен, и оценка та же', oneMsOver === '* 61,0', oneMsOver)
 }
 
 {
@@ -1230,7 +1268,7 @@ function barsOf(tree, key) {
 
 // --- легенда называет то, что печатает таблица --------------------------------
 //
-// Рейтинг — один из шести столбцов краткого набора (`CORE_COLUMNS`), и его клетка
+// Рейтинг — один из семи столбцов краткого набора (`CORE_COLUMNS`), и его клетка
 // печатает `~` и `*` рядом с числом. Определения этих двух знаков жили в
 // `note.extra` — в той половине легенды, которая читается только с открытыми «все
 // метрики», — так что читатель, который эту кнопку ни разу не нажал, видел в
@@ -1300,10 +1338,11 @@ function barsOf(tree, key) {
 // the column decides the width, a figure the host did not measure draws nothing,
 // and one row alone has nothing to be a share of.
 //
-// The case runs in the expanded column set because that is where the error rate
-// lives now: `ош./100` moved out of the compact set to pay for the rating column,
-// and a bar is still something this panel drew — the assertion follows the
-// column rather than the column staying where the assertion was.
+// The case runs in the expanded column set because that is where the two columns
+// it also asserts on live: `ретраи` and `префилл` are behind the button, and the
+// case proves they draw no bar. `ош./100` came back to the compact set, and a
+// column's bar is asserted in both sets rather than only in the wider one — the
+// short-set case above draws it there.
 console.log('')
 console.log('--- полоска под числом: доля от наибольшего в столбце ---')
 {

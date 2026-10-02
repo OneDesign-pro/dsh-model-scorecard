@@ -104,7 +104,7 @@ window.__ModuleLoader__.load({
         'view.providers': 'по провайдерам',
         'columns.all': 'все метрики',
         'hint.columns.all':
-          'Показывает все столбцы, а не только основные: отклик p90, ош./100, tok/s max, «замер», llm / шаг, префилл, «наш оверхед», кэш, ретраи, «виден» и остальные. Нажмите ещё раз, чтобы вернуть краткий набор. Выбор запоминается и переживает перезагрузку страницы.',
+          'Показывает все столбцы, а не только основные: отклик p90, tok/s max, «замер», llm / шаг, префилл, «наш оверхед», кэш, ретраи, «виден» и остальные. Нажмите ещё раз, чтобы вернуть краткий набор. Выбор запоминается и переживает перезагрузку страницы.',
         'models.open': 'Модели',
         'models.count': '{selected} из {total}',
         'models.group': 'Выбор моделей',
@@ -331,7 +331,7 @@ window.__ModuleLoader__.load({
         'note.extra':
           '«замер» — доля шагов, где спана хватило для достоверной скорости: низкое значение значит, что модель в основном отдавала очень короткие порции, и tok/s по ней менее надёжен. «кэш» — доля чтения из кэша промпта во входных токенах. «виден» — когда модель последний раз отвечала. Под «Подробнее» под названием модели — из чего сложился рейтинг и что маршрут объявляет о себе: контекст, лимит ответа по умолчанию, вход и reasoning.',
         'note.collapsed':
-          'Отклик p90, tok/s max, «замер», llm / шаг, «кэш», «виден» и ош./100 — за кнопкой «все метрики»; там же под названием модели появляется «Подробнее»: из чего сложился рейтинг и что маршрут объявляет о себе.',
+          'Отклик p90, tok/s max, «замер», llm / шаг, «кэш», «виден» — за кнопкой «все метрики»; там же под названием модели появляется «Подробнее»: из чего сложился рейтинг и что маршрут объявляет о себе.',
       },
       en: {
         'panel.title': 'Model speed and stability',
@@ -345,7 +345,7 @@ window.__ModuleLoader__.load({
         'view.providers': 'By Provider',
         'columns.all': 'All Metrics',
         'hint.columns.all':
-          'Shows every column, not just the core ones: response p90, err/100, tok/s max, “meas.”, llm / step, prefill, our overhead, cache, retries, “seen” and the rest. Press it again to go back to the short set. The choice is remembered and survives a page reload.',
+          'Shows every column, not just the core ones: response p90, tok/s max, “meas.”, llm / step, prefill, our overhead, cache, retries, “seen” and the rest. Press it again to go back to the short set. The choice is remembered and survives a page reload.',
         'models.open': 'Models',
         'models.count': '{selected} of {total}',
         'models.group': 'Model selection',
@@ -545,7 +545,7 @@ window.__ModuleLoader__.load({
         'note.extra':
           '“meas.” is the share of steps whose span was long enough to be a reliable rate: a low value means the model mostly emitted very short bursts, so its tok/s is the least trustworthy number in the row. “cache” is the prompt-cache read share of input tokens. “seen” is when the model last answered. The “Details” block under the model name says what the rating is made of and what the route declares about itself — context, default output cap, input and reasoning.',
         'note.collapsed':
-          'Response p90, tok/s max, “meas.”, llm / step, “cache”, “seen” and err/100 — behind the “all metrics” button; there the model name also gains a “Details” block: what the rating is made of and what the route declares about itself.',
+          'Response p90, tok/s max, “meas.”, llm / step, “cache”, “seen” — behind the “all metrics” button; there the model name also gains a “Details” block: what the rating is made of and what the route declares about itself.',
       },
     }
 
@@ -1658,11 +1658,11 @@ window.__ModuleLoader__.load({
       {
         key: 'rating',
         base: 'num',
-        // The rating is the compact set's only new column and it pays for itself
-        // out of `ош./100`, which moves to the expanded set: the compact table is
-        // six columns wide before and after (see `CORE_COLUMNS`). A rate of errors
-        // per 100 steps is a diagnostic to consult; a score that already folds
-        // throughput and latency together is what a reader picks a route with.
+        // The rating and `ош./100` are the compact set's verdict and its evidence for
+        // the one thing that matters most here — does the route finish what it
+        // starts — and both earn the line they are on. The rating was once paid
+        // for out of the error rate (see `CORE_COLUMNS`), which was a way of
+        // making the reader choose between them; the table had room for both.
         sort: 'rating',
         labelKey: 'column.rating',
         hintKey: 'hint.rating',
@@ -1698,11 +1698,17 @@ window.__ModuleLoader__.load({
           return h(
             'span',
             { className: 'dsh-ms-val', title: label },
-            figure,
             // A published score on thin evidence, or one whose evidence has all
             // aged out, says so in the cell and not only in the tooltip. `~` is
-            // the same mark the agent's text report prints for the same score, so
-            // the two surfaces cannot describe one number two ways.
+            // the same mark the agent's text report leads with for the same score,
+            // so the two surfaces cannot describe one number two ways.
+            //
+            // The mark leads the figure rather than trailing it, and this is the
+            // one arrangement that keeps the column readable: every cell here is
+            // right-aligned (see `dsh-ms-num`), so a glyph appended after the
+            // number pushes exactly that row's digits one glyph to the left of the
+            // column every unmarked row is read in. Leading, the figure ends on
+            // the cell's right edge on every row, whether it carries a mark or not.
             ...marks.map((mark) =>
               h(
                 'span',
@@ -1710,6 +1716,7 @@ window.__ModuleLoader__.load({
                 mark.glyph,
               ),
             ),
+            figure,
             h('span', { className: 'dsh-ms-sr-only' }, ` — ${label}`),
           )
         },
@@ -1975,11 +1982,12 @@ window.__ModuleLoader__.load({
       ['errorRate', 'modelErrors', 'errors', 'interrupted'],
       ['llm', 'prefill', 'overhead', 'cache'],
     ]
-    // The compact set: identity, the two columns a reader acts on, and the three
-    // figures a decision is made from. It is six columns wide, the same as it was
-    // before the rating existed — `ош./100` paid for the rating rather than the
-    // table growing a seventh. Every other column is one click away behind
-    // "all metrics", including a rate a reader consults rather than picks by.
+    // The compact set: identity, the two columns a reader acts on, and the four
+    // figures a decision is made from. It is seven columns wide — it was six
+    // while the rating was bought with `ош./100`, and the reader's own verdict on
+    // that trade was that the column had come back: a table that fits does not
+    // owe the reader a narrower one. Every other column is one click away behind
+    // "all metrics", including the counts that go with this rate.
     //
     // This set is the *only* declaration of what is compact. The definitions above
     // carry no `tier` of their own, and the table's `tier` is derived from here in
@@ -1990,7 +1998,7 @@ window.__ModuleLoader__.load({
     // and `errors` said `core` while they are not. The rendered table was right and
     // the list was wrong, which is the worst shape for a list a reader treats as
     // the specification.
-    const CORE_COLUMNS = new Set(['name', 'liveness', 'rating', 'steps', 'ttft', 'e2e'])
+    const CORE_COLUMNS = new Set(['name', 'liveness', 'rating', 'steps', 'ttft', 'e2e', 'errorRate'])
     const COLUMNS = COLUMN_GROUPS.flatMap((keys, group) => keys.map((key, index) => ({
       ...COLUMN_DEFINITIONS.find((column) => column.key === key),
       tier: CORE_COLUMNS.has(key) ? 'core' : 'extra',
@@ -2144,7 +2152,7 @@ window.__ModuleLoader__.load({
      * to paraphrase it in `note.extra`, and two copies of the same caveat drift
      * apart the first time one of them is edited. The sentence is appended to
      * `note.core` rather than to the expanded half because the rating is one of the
-     * six compact columns — a reader who never presses «все метрики» still sees
+     * seven compact columns — a reader who never presses «все метрики» still sees
      * `~` and `*` in the cell.
      */
     function markLegend(t) {
@@ -2913,8 +2921,11 @@ window.__ModuleLoader__.load({
    measurements than the panel would like to publish from, and the number is
    printed anyway rather than withheld. It is tertiary ink, not a state colour —
    thin evidence is a caveat on a reading, not a fault, and green or red beside a
-   score would be the intelligence grading this column must not do. */
-.dsh-ms-rating-thin { margin-left:2px; color:var(--ms-ink-3); }
+   score would be the intelligence grading this column must not do. The gap is on
+   the right because the glyph leads the figure: a numeric column is read down the
+   right edge of its digits, and a mark printed after the number would move that
+   edge on the marked rows alone. */
+.dsh-ms-rating-thin { margin-right:2px; color:var(--ms-ink-3); }
 /* The route's own detail, folded under the name it belongs to. A native details
    element, so Enter and Space open it and no handler here has to; the summary
    keeps the panel's own ink because it is a control, and the body is the sunken

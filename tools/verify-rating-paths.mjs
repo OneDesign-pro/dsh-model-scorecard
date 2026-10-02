@@ -419,25 +419,28 @@ const STALE_MS = RATING_POLICY.halfLifeDays * DAY
 const atNow = (now) => renderReportText(cold, { sort: 'rating', limit: 15, now })
 const realClock = renderReportText(cold, { sort: 'rating', limit: 15 })
 // The rating column of one row, read off the padded table: the label is the first
-// cell, the figure and its marks the second.
+// cell, the marks and the figure the second.
 const cellOf = (text, label) => {
   const line = text.split('\n').find((row) => row.startsWith(label))
   return line === undefined ? null : line.trim().split(/\s+/)[1]
 }
 // The rating cells of the named rows, read off the padded table: the label is the
-// first cell, the figure and its marks the second. Named rather than scraped,
+// first cell, the marks and the figure the second. Named rather than scraped,
 // because the report also contains a provenance line, summary lines and an `FS_*`
 // footnote, and a rule loose enough to find cells among them is also loose enough
 // to read one of those as a cell.
 const cellsOf = (text, labels) => labels.map((label) => cellOf(text, label))
 const figure = coldRating.score.toFixed(1)
 const thinMark = coldRating.provisional === true ? '~' : ''
-const freshCell = `${figure}${thinMark}`
+// The marks lead the figure, in both surfaces: the column is padded from the
+// left, so a mark printed after the number would move the digits of the marked
+// rows out of the column the unmarked rows are read in.
+const freshCell = `${thinMark}${figure}`
 
 check(
   'фикстура датирована будущим, и будущий замер не устаревает',
   anchor > Date.now() &&
-    cellsOf(realClock, ['alpha/fast', 'beta/slow']).every((cell) => cell !== null && !cell.endsWith('*')) &&
+    cellsOf(realClock, ['alpha/fast', 'beta/slow']).every((cell) => cell !== null && !cell.startsWith('*')) &&
     !realClock.includes('stale ('),
   `якорь ${new Date(anchor).toISOString()}, сегодня ${new Date().toISOString()}, ячейки ${cellsOf(realClock, ['alpha/fast', 'beta/slow']).join(' ')}`,
 )
@@ -459,13 +462,13 @@ check(
 const justOver = atNow(anchor + STALE_MS + 1)
 check(
   'на миллисекунду больше — помечена, и число не изменилось',
-  cellOf(justOver, 'alpha/fast') === `${freshCell}*` && justOver.includes(figure),
+  cellOf(justOver, 'alpha/fast') === `${thinMark}*${figure}` && justOver.includes(figure),
   `ячейка ${cellOf(justOver, 'alpha/fast')}, было ${freshCell}`,
 )
 check(
-  'знаки стоят в том же порядке, что в панели: `~` перед `*`',
+  'знаки стоят в том же порядке, что в панели: `~` перед `*`, и оба перед числом',
   coldRating.provisional !== true ||
-    cellOf(justOver, 'alpha/fast') === `${figure}~*`,
+    cellOf(justOver, 'alpha/fast') === `~*${figure}`,
   `provisional=${coldRating.provisional}, ячейка ${cellOf(justOver, 'alpha/fast')}`,
 )
 check(
@@ -560,8 +563,8 @@ check(
 )
 check(
   'и рейтинг в выводе инструмента — то же число, что в отчёте коллектора',
-  toolRatingText.includes(`${coldRating.score.toFixed(1)}~`),
-  `${coldRating.score.toFixed(1)}~${toolRatingText.includes(`${coldRating.score.toFixed(1)}~`) ? ' найдено' : ' не найдено'} в выводе инструмента`,
+  toolRatingText.includes(`${thinMark}${coldRating.score.toFixed(1)}`),
+  `${thinMark}${coldRating.score.toFixed(1)}${toolRatingText.includes(`${thinMark}${coldRating.score.toFixed(1)}`) ? ' найдено' : ' не найдено'} в выводе инструмента`,
 )
 
 // The panel's own route, driven end to end: this is the contract the settings
