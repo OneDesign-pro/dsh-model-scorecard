@@ -5,9 +5,44 @@ Read this before changing anything in this repository.
 ## Language
 
 **Answer this user in Russian, always.** The repository itself stays in English —
-code, comments, README, commit messages — because that is cheaper in tokens.
-The prose *to the person* is Russian; the artifacts are not. Do not translate
-code comments into Russian to "match" the conversation.
+code, comments, commit messages, and `README.md` — because that is cheaper in
+tokens. The prose *to the person* is Russian; the artifacts are not. Do not
+translate code comments into Russian to "match" the conversation.
+
+**`README_ru.md` is the one exception, and it is not a second document.** It is
+the Russian edition of `README.md`: the same headings in the same order, the
+same tables with the same rows and columns, the same fenced blocks byte for
+byte, and only the prose translated. A reader who opens either file gets the
+same document in a different language, and neither is allowed to know something
+the other does not.
+
+### The two READMEs move together
+
+**A change to one README is not done until the other says the same thing, in the
+same commit.** Not "later", not "in a follow-up": the same commit. Concretely:
+
+- A new or changed metric, column, figure, caveat or warning goes into
+  `README.md` *and* `README_ru.md` before you commit. Landing the English half
+  alone is a broken commit, however finished it looks.
+- **`AGENTS.md` stays English and has no Russian twin.** It is instructions to
+  agents, not prose to a reader.
+- **Identifiers, and anything a machine reads, stay Latin in both files**:
+  `ttft`, `SORT_KEYS`, `tools/verify-rating.mjs`, `ctx.llm`, `tok/s`, `KB`,
+  `delayMs`, `~`, `*`. A translated path is a broken path.
+- **Everything inside a fence is copied byte for byte**, comments included. The
+  install block's commented migration steps are text a reader copies, not prose
+  to translate.
+- **One heading, one wording.** A Russian heading and every reference to it
+  (`see *The rating*` → `см. *Рейтинг*`) use the same words everywhere, and a
+  reworded heading is a reworded reference in the same commit.
+- **The English file is authoritative.** When the two disagree about a fact, the
+  English one is right and `README_ru.md` is the defect. Fix the Russian file;
+  never "fix" `README.md` to match it.
+- **Run `node tools/verify-readme-parity.mjs` before committing** a change to
+  either file. It compares heading sequence, fenced blocks, table shapes and the
+  two-way language link, and fails on drift. It cannot read Russian, so it is a
+  floor and not a proof: it shows the documents still line up, not that the
+  translation is good.
 
 ## What this plugin is
 
@@ -125,6 +160,7 @@ node tools/verify-budget.mjs          # a bounded pass is still bounded
 node tools/verify-provider-filter.mjs # a filter reaches the summary lines
 node tools/verify-retry.mjs           # retry identity never goes negative
 node tools/verify-configured-rows.mjs # a pair with no history is a row, and is ordered as one
+node tools/verify-readme-parity.mjs  # the two READMEs are still one document
 ```
 
 A change that alters a number is not done until the tools that assert the old

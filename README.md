@@ -1,5 +1,7 @@
 # dsh-model-scorecard
 
+**English** · [Русский](README_ru.md)
+
 A scorecard for every configured `(provider, model)` route in DeepSeek Harness,
 built from three sources that cannot be confused with one another: the session
 history the Harness already writes, the metadata each adapter declares about its
