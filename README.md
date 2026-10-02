@@ -1160,11 +1160,14 @@ history: once in the background after activation, and then on demand.
 Opening the panel is answered in three phases, cheapest first, so the table is
 never held behind a cold fold:
 
-1. **The in-memory fold.** This process already folded the corpus, so the route
-   answers from memory in milliseconds without touching the store. It answers only
-   from sessions *this* process folded — a snapshot loaded from disk is phase 2's
-   business, and letting phase 1 serve it unchecked is how a table missing every
-   session written since the last fold became the fast answer.
+1. **The in-memory fold.** This process has folded the whole corpus, so the route
+   answers from memory in milliseconds without touching the store. A session
+   counts as folded here when this process read it, or accepted its snapshot
+   entry after comparing that entry's revision against the listing this process
+   made — which is how a host that restarts onto a complete snapshot answers the
+   whole corpus at once instead of only the handful of logs it had to re-read. A
+   process that has not finished such a pass declines and phase 2 serves it, so
+   neither an unchecked disk snapshot nor a delta can become the fast answer.
 2. **The on-disk snapshot.** A fold written by an earlier process is validated
    against **one** corpus listing — revisions only, no log is read — and unchanged
    logs are served from it as they are. A snapshot that cannot vouch for every

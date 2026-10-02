@@ -374,7 +374,78 @@ console.log(`полный проход без бюджета занял бы ~${
   await rm(phaseDir, { recursive: true, force: true })
 }
 
-// --- 7. a long-budget warm pass finishes a cold corpus on its own ------------
+// --- 7. the in-memory phase answers for the corpus, not for the delta --------
+//
+// The regression this guards: a host restarts onto a complete snapshot, its warm
+// pass walks every listed session but reads only the logs that moved since that
+// snapshot, and the in-memory phase then answered from those few reads alone.
+// Measured on this machine's real store on 2026-10-02: 7 of 499 sessions read,
+// so the panel drew 1 217 steps over 4 models and 4 providers where the tool —
+// folding the same cache — drew 36 096 over 71 and 16, and the answer said
+// `pending: 0` with `complete: false`, which is a client that never re-asks.
+{
+  resetReads()
+  const memoryDir = await mkdtemp(join(tmpdir(), 'model-scorecard-memory-'))
+  const fake = store({ size: SESSIONS, legacy: 10 })
+
+  const cold = createCollector(fake.ctx, { persist: true, cacheDir: memoryDir })
+  await cold.collect({ budgetMs: 60000, sort: 'steps' })
+  await cold.saveSnapshot()
+
+  // The two logs a restarted host actually reads: one the snapshot never saw,
+  // and one whose own file moved since.
+  fake.addSession('session-new', '1:500:3:4:5')
+  fake.bumpFile('session-7')
+
+  const warm = createCollector(fake.ctx, { persist: true, cacheDir: memoryDir })
+  check(
+    'память молчит, пока процесс не свёл корпус',
+    (await warm.snapshotSummary({ sort: 'steps' })) === null,
+  )
+
+  const before = totalReads()
+  const pass = await warm.collect({ budgetMs: 60000, sort: 'steps' })
+  check(
+    'тёплый проход прочитал только изменившееся',
+    totalReads() - before === 2,
+    `чтений=${totalReads() - before}, readNow=${pass.provenance.readNow}`,
+  )
+  check(
+    'тёплый проход переиспользовал снимок',
+    pass.provenance.reused === SESSIONS - 1,
+    `reused=${pass.provenance.reused}`,
+  )
+
+  const memory = await warm.snapshotSummary({ sort: 'steps' })
+  check(
+    'память отвечает всем корпусом, а не прочитанной дельтой',
+    memory !== null &&
+      memory.report.steps === SESSIONS + 1 &&
+      memory.report.byModel.length >= 3 &&
+      memory.scanned === SESSIONS + 1,
+    `sessions=${memory?.scanned} steps=${memory?.report?.steps} models=${memory?.report?.byModel.length}`,
+  )
+  const memoryReads = totalReads()
+  const panel = await panelPayload(warm, { sort: 'steps', view: 'model' }, { sort: 'steps', view: 'model' })
+  check(
+    'панель и инструмент показывают один корпус',
+    panel.totals?.steps === SESSIONS + 1 && totalReads() === memoryReads,
+    `steps=${panel.totals?.steps} чтений=${totalReads() - memoryReads}`,
+  )
+
+  // Half a fold is not a corpus: a pass that left work behind must not arm the
+  // in-memory phase, or the same partial table returns by another road.
+  const partial = createCollector(store().ctx, { persist: false })
+  const bounded = await partial.collect({ budgetMs: 0, sort: 'steps' })
+  check('ограниченный проход оставил остаток', bounded.pending > 0, `pending=${bounded.pending}`)
+  check(
+    'неполная свёртка не отвечает как за весь корпус',
+    (await partial.snapshotSummary({ sort: 'steps' })) === null,
+  )
+  await rm(memoryDir, { recursive: true, force: true })
+}
+
+// --- 8. a long-budget warm pass finishes a cold corpus on its own ------------
 {
   resetReads()
   const fake = store()
