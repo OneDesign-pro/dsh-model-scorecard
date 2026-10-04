@@ -52,6 +52,8 @@ window.__ModuleLoader__.load({
       e2e: 'desc',
       prefill: 'desc',
       overhead: 'asc',
+      tools: 'desc',
+      toolTime: 'asc',
       errorRate: 'desc',
       modelErrors: 'desc',
       interrupted: 'desc',
@@ -156,6 +158,8 @@ window.__ModuleLoader__.load({
         'column.e2e': 'tok/s e2e med',
         'column.prefill': 'префилл',
         'column.overhead': 'наш оверхед',
+        'column.tools': 'инстр./шаг',
+        'column.toolTime': 'инстр. с/шаг',
         'column.lastSeen': 'виден',
         'column.liveness': 'статус',
         'column.rating': 'рейтинг',
@@ -234,6 +238,10 @@ window.__ModuleLoader__.load({
           'Доля времени от начала запроса до завершения ответа, которая прошла до появления первого токена. 0.3 — модель отвечает быстро, 0.85 — почти всё время уходит на префилл, и это уже не «модель думает», а провайдер. Доля вычисляется отдельно для каждого шага как время до первого токена, делённое на всё время до завершения ответа, затем берётся медиана. Значение 0,3 означает, что 30% времени ожидания пришлось на период до первого токена; значение 0,85 — что 85%. Чем выше доля, тем больше задержка до начала ответа.',
         'hint.overhead':
           'Время шага, которое не является ни ожиданием первого токена, ни стримингом: пауза между последним фрагментом ответа и закрывающим событием. Это единственная колонка, где чинить — нам: всё остальное в таблице зависит от провайдера. По всей истории это около 2% времени модели, но оно собрано неравномерно — у большинства моделей единицы миллисекунд, у отдельных сотни. От 200 мс строка желтеет.',
+        'hint.tools':
+          'Сколько вызовов инструментов приходится на один шаг этой модели. Считается по всем её шагам, поэтому шаг, где инструмент не вызывался, — честный ноль, а не пробел: сравниваются модели целиком, а не только те шаги, где инструмент понадобился. Это объём работы, а не качество: больше вызовов не значит лучше. Считаются только те вызовы, которые вернули результат; вызов, на который ответа не было, не попадает ни в одну цифру колонки. «-» означает, что у модели нет ни одного шага.',
+        'hint.toolTime':
+          'Медиана того, сколько времени ждал один шаг этой модели, пока выполнялись вызванные им инструменты: от `tool/call` до `tool/result`. Это время инструмента, а не модели — здесь лежит и работа песочницы (`bash` — около 2,8 с на вызов), и ожидание человека (`ask_user_question` — сотни секунд на вызов). Сами миллисекунды модели ничего не говорят: колонка нужна, чтобы увидеть, сколько всего цикл агента тратит между двумя вызовами модели, и разбивка по инструментам отдаётся в ответе панели. Время инструментов не входит во «наш оверхед» и во время шага: лог закрывает шаг сообщением модели, а ответ инструмента приходит после. Медиана берётся только по шагам, где инструмент вызывался, поэтому у модели, чьи шаги обходятся без него, стоит «-», а не 0 мс.',
         'hint.lastSeen': 'Когда модель отвечала в последний раз — по всем сессиям в истории.',
         // The rating is the one column whose figure is a verdict rather than a
         // reading, so its heading carries the whole rule: what is counted, what is
@@ -393,6 +401,8 @@ window.__ModuleLoader__.load({
         'column.e2e': 'tok/s e2e med',
         'column.prefill': 'prefill',
         'column.overhead': 'our overhead',
+        'column.tools': 'tools/step',
+        'column.toolTime': 'tool time/step',
         'column.lastSeen': 'seen',
         'column.liveness': 'status',
         'column.rating': 'rating',
@@ -464,6 +474,10 @@ window.__ModuleLoader__.load({
           'Median share of the time from request start through response completion that elapsed before the first token. It is computed per step before taking the median: 0.3 means 30% of the wait was before output began; 0.85 means 85%. Higher means more delay before the response starts.',
         'hint.overhead':
           'Time in the step that is neither the wait for the first token nor the streaming: the gap between the last delta and the event that closed the step. This is the one column whose fix is on this side — everything else in the table belongs to the provider. Across this history it is about 2% of model time, but it is not spread evenly: units of milliseconds for most models, hundreds for a few. The row turns amber from 200 ms.',
+        'hint.tools':
+          'Tool calls per step of this model, counted over every step it took — so a step that called nothing is a measured zero rather than missing data, and models are compared whole rather than only over the steps that happened to need a tool. This is how much loop the work involves, not how good it is: more calls is not better. Only calls that came back are counted; a call with no result is in no figure of this column. A “-” means the model has no steps at all.',
+        'hint.toolTime':
+          'Median wall time one step of this model spent waiting for the tools it called, from `tool/call` to `tool/result`. It is the tool’s time and not the model’s: the sandbox running a command (bash, ~2.8 s a call on this history) and a person answering a question (ask_user_question, hundreds of seconds a call) are both in it, which is why the milliseconds alone say nothing about the model. The column is here to show what the agent loop spends between two model calls, and the per-tool breakdown travels with the row in the panel’s answer. Tool time is not part of our overhead or of the step’s own duration: the log closes the step at the model’s message and the tool answers after it. The median is over the steps that did call a tool, so a model whose steps need none shows “-” rather than 0 ms.',
         'hint.lastSeen': 'When the model last answered, across every session in the history.',
         'hint.rating':
           'Technical rating of this provider–model pair, 0–100. It weighs generation speed, typical response and slow response. All history, with a measurement’s weight halved every 30 days against the newest usable one. Retried and interrupted steps are excluded. It does not judge intelligence, availability, price or context size. A rating is published from 10 qualified measurements and marked “~” while the effective sample or the session count is small, and “*” when the newest usable measurement is over 30 days old: the score stays historical and is never recomputed from its age. “-” means there is no rating — hover the figure to read why.',
@@ -1934,6 +1948,28 @@ window.__ModuleLoader__.load({
         cell: (row, ctx) => ctx.fmt.ms(row.overheadMsMedian),
         tone: (row) => (row.overheadMsMedian !== null && row.overheadMsMedian >= 200 ? 'dsh-ms-warn' : null),
       },
+      // The two tool columns are the last piece of the decomposition, and the
+      // only one that is not about the model's own speed: `tools` counts what a
+      // step reached for, `toolTime` is what that cost in wall time between two
+      // model calls. They sit apart from `overhead` in the group order because
+      // `overhead` is the harness and these are the loop — the same shape of
+      // question, three different owners of the milliseconds.
+      {
+        key: 'tools',
+        base: 'num',
+        sort: 'tools',
+        labelKey: 'column.tools',
+        hintKey: 'hint.tools',
+        cell: (row, ctx) => ctx.fmt.num(row.toolCallsPerStep, 2),
+      },
+      {
+        key: 'toolTime',
+        base: 'num',
+        sort: 'toolTime',
+        labelKey: 'column.toolTime',
+        hintKey: 'hint.toolTime',
+        cell: (row, ctx) => ctx.fmt.ms(row.toolMsMedian),
+      },
       // The panel can sort by recency, so the timestamp it sorts by is a column
       // of its own instead of an invisible key.
       {
@@ -1955,6 +1991,7 @@ window.__ModuleLoader__.load({
       ['e2e', 'tps', 'tpsMax', 'confidence'],
       ['errorRate', 'modelErrors', 'errors', 'interrupted'],
       ['llm', 'prefill', 'overhead', 'cache'],
+      ['tools', 'toolTime'],
     ]
     // The compact set: identity, the two columns a reader acts on, and the four
     // figures a decision is made from. It is seven columns wide — it was six

@@ -39,6 +39,7 @@ function sample(
     retryBackoffMs = null,
     retryDeadMs = null,
     ttftCleanMs = null,
+    toolSpans = [],
   } = {},
 ) {
   clock += 1000
@@ -63,6 +64,7 @@ function sample(
     retryBackoffMs,
     retryDeadMs,
     ttftCleanMs,
+    toolSpans,
   }
 }
 
@@ -250,6 +252,38 @@ for (const entry of p10Errors) {
     errors.push({ provider: entry.provider, model: entry.model, time: clock, kind: 'tool', code, name: 'x' })
   }
   clock += 1000
+}
+
+// --- p11: how many tool calls, and what they cost, are two questions ----------
+// `manyslow` calls three tools a step and waits 12 s for them; `fewfast` calls
+// one and waits 10 ms. The two orders are exactly opposite, which is the only
+// reason this fixture proves anything: a `tools` key that quietly read the time
+// (or a `toolTime` key that read the count) would produce the same order as its
+// neighbour and pass a check that only counted the rows.
+//
+// `none` is the third case and the reason the two columns are not one: its steps
+// called no tool at all, so its *count* is a measured 0 while its *time* is
+// unmeasured. It therefore sorts last in both orders — as a zero by the rate and
+// as a dash by the median — and a fold that had folded the empty spans in would
+// put it in the middle of the time column at a confident 0 ms.
+const tool = (name, ms) => ({ name, ms })
+const p17 = [
+  { model: 'manyslow', perStep: 3, span: tool('bash', 4000) },
+  { model: 'fewfast', perStep: 1, span: tool('read', 10) },
+]
+for (const entry of p17) {
+  for (let index = 0; index < 4; index += 1) {
+    samples.push(
+      sample('p17', entry.model, {
+        ttftMs: 500,
+        llmMs: 600,
+        toolSpans: Array.from({ length: entry.perStep }, () => entry.span),
+      }),
+    )
+  }
+}
+for (let index = 0; index < 4; index += 1) {
+  samples.push(sample('p17', 'none', { ttftMs: 500, llmMs: 600, toolSpans: [] }))
 }
 
 let failures = 0
@@ -567,6 +601,47 @@ check(
     byName9.batched.overheadMs.median === 430,
   rowsFor('p9', 'overhead').map((r) => `${r.model} ${timing(r.overheadMs.median)}`).join(', '),
 )
+// p17: the two tool orders, which are opposite, and the row that has only one of
+// the two figures.
+const p17ByCount = rowsFor('p17', 'tools')
+const p17ByTime = rowsFor('p17', 'toolTime')
+const p17Rows = Object.fromEntries(rowsFor('p17', 'steps').map((row) => [row.model, row]))
+check(
+  'число вызовов инструментов и их стоимость — два разных порядка',
+  same(p17ByCount, ['manyslow', 'fewfast', 'none']) && same(p17ByTime, ['fewfast', 'manyslow', 'none']),
+  `tools → ${names(p17ByCount)}, toolTime → ${names(p17ByTime)}`,
+)
+check(
+  'инструментов на шаг считается по всем шагам, время — только по тем, где их был вызов',
+  p17Rows.manyslow.toolCallsPerStep === 3 &&
+    p17Rows.manyslow.toolCalls === 12 &&
+    p17Rows.manyslow.toolMs.median === 12000 &&
+    p17Rows.manyslow.toolMs.count === 4,
+  `manyslow: ${p17Rows.manyslow.toolCallsPerStep}/шаг, ${timing(p17Rows.manyslow.toolMs.median)} ms, n=${p17Rows.manyslow.toolMs.count}`,
+)
+check(
+  'шаг без вызова инструмента — честный ноль по счётчику и прочерк по времени',
+  p17Rows.none.toolCalls === 0 &&
+    p17Rows.none.toolCallsPerStep === 0 &&
+    p17Rows.none.toolMs.median === null &&
+    p17Rows.none.toolMs.count === 0,
+  `none: ${p17Rows.none.toolCallsPerStep}/шаг, медиана ${p17Rows.none.toolMs.median}`,
+)
+check(
+  'инструменты перечислены по имени, и сумма совпадает со счётчиком',
+  p17Rows.manyslow.toolCallsTop.length === 1 &&
+    p17Rows.manyslow.toolCallsTop[0].name === 'bash' &&
+    p17Rows.manyslow.toolCallsTop[0].calls === 12 &&
+    Math.abs(p17Rows.manyslow.toolCallsTop[0].ms / 1000 - p17Rows.manyslow.toolSeconds) < 1e-9,
+  JSON.stringify(p17Rows.manyslow.toolCallsTop),
+)
+check(
+  'оба порядка переворачиваются тем же сравнителем',
+  same(rowsFor('p17', 'tools', 'asc'), ['none', 'fewfast', 'manyslow']) &&
+    same(rowsFor('p17', 'toolTime', 'desc'), ['manyslow', 'fewfast', 'none']),
+  `tools asc → ${names(rowsFor('p17', 'tools', 'asc'))}, toolTime desc → ${names(rowsFor('p17', 'toolTime', 'desc'))}`,
+)
+
 const qualified = rowsFor('p6', 'speed')
 const byName = Object.fromEntries(qualified.map((row) => [row.model, row]))
 check('слипшийся пакет не становится замером', byName.packed?.speedTps.median === null && byName.packed.speedTps.count === 0, `tps=${byName.packed?.speedTps.median}`)

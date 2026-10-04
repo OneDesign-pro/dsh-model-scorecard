@@ -217,6 +217,90 @@ contributes zero, so zero does not establish an observed empty context. What a
 route *declares* about its window is a different source and a different
 question; see *What the route declares* in `README.md`.
 
+## Tool time: what the agent loop spends between two model calls
+
+`toolMs` is one step's wall time waiting for the tools it called, `tool/call` →
+`tool/result` paired by `callId` — the official `tool` projection, and the reason
+this figure was not a redefinition of anything. It is folded onto the *sample of
+the step that raised the calls*, joined by the `(turn, step)` the log's own event
+carries, and it is joined after the walk rather than during it: the log records
+`assistant/message`, then `tool/call`, then `tool/result`, then `step/end`, so a
+sample stamped as it is pushed would always read zero. Doing it afterwards also
+makes the join independent of that order.
+
+**It does not overlap `llm` or `overhead`, and that is measured, not argued.**
+Every one of the **32 080** paired calls on this history answers *after* the
+`assistant/message` that closed its step, so the two figures are disjoint by
+construction — the step's LLM span is closed before any of its tools run.
+`tools/verify-tool-timing.mjs` asserts it over the corpus, because a result that
+ever landed first would mean `overhead` had been counting tool time under another
+name and this column would be publishing a second copy of it.
+
+### The two halves, and why they are two columns
+
+`toolCallsPerStep` is `toolCalls / steps` over **every** step the pair took, so a
+step that called nothing is a measured `0` and a model whose steps need no help
+reads as zero rather than as missing. `toolMs` is summarised over the steps that
+**did** call something, and a pair with none shows `-`: a median over mostly-zero
+steps is not what a reader is asking for. On this history, over the 40 of 49 rows
+that called anything, the two ranges are 0.50–1.76 calls a step, and 9 ms to
+1 728 ms of median tool time per step.
+
+### The number is the tool's, and the breakdown is what makes it readable
+
+This is the part that had to be measured before the column could be designed.
+Total tool time on this history is **128 060 s** over 32 080 calls — mean 3 992 ms,
+median **38 ms**, p90 535 ms, p99 57.6 s, max 7 h. The distribution is not the
+model's; it is the tools the model happened to reach for:
+
+| tool | calls | ms/call | total |
+|---|---|---|---|
+| `ask_user_question` | 125 | 519 005 | 64 876 s |
+| `bash` | 15 929 | 2 764 | 44 033 s |
+| `edit` | 5 222 | 1 786 | 9 326 s |
+| `write` | 492 | 6 872 | 3 381 s |
+| `read` | 5 817 | 20 | 115 s |
+
+`ask_user_question` is **a person thinking**, and it is 76 of the busiest pair's
+20 315 calls and 28 328 s of its 64 922 s. So the column publishes `toolCallsTop`
+beside the median: a row that looks slow can name the tool that made it slow, and
+nothing is silently excluded — a hidden exclusion list would make the column
+mean "time minus the tools I decided to discount", which is a number no reader can
+check.
+
+The tail carries the same caveat as `retryDeadMs` (see *What a retry costs*): a
+wall-clock difference includes a suspended machine. `gpt-5.6-luna` has a p90 of
+**284 712 ms** from five `write` calls, which is a sleep and not a tool. Medians
+are what the panel shows and they are unaffected.
+
+## `turns`: how the conversation ended, not how a step did
+
+`turn/end` carries `reason.kind`, and the fold used to parse it and drop it. It is
+a separate record set — like `errors` and `retries`, and for the same reason: a
+turn spans many steps, so the outcome has nowhere to live on a sample.
+
+The vocabulary measured on this history is **five** kinds, not the four the debt
+note guessed when it was written: `completed` 729, `error` 129, `aborted` 73,
+`max-tokens` 8, `interrupted` 2. The kind is carried through as a name and never
+as a flag, so a sixth kind is counted and names itself without a code change.
+
+A turn is attributed to the model that last spoke in it, through a speaker
+variable that is **cleared at `turn/end`** rather than the session-wide one the
+tool-error and retry attributions use. **111 of the 941** turns here ended without
+a model in them; carrying the previous turn's speaker forward would have filed
+every one of them under a model that never answered. They reach no row.
+
+`tools/verify-turn-ends.mjs` asserts the three things that can go wrong here: one
+turn produces one record and only if a model spoke in it, the kinds add up to
+`turns` and `turnsUnclean` plus the completed count is `turns` again, and the
+corpus exercises more than one kind — a fold that recorded `kind` and only ever
+saw `completed` would pass everything else and publish a column of zeroes.
+
+There is no panel column for it, and the reason is the population: 941 turns over
+39 rows, so most rows carry a handful. The figures are in the payload, the
+breakdown is where the rest of them are, and a heading a reader clicks for a
+per-step figure is the wrong place for a per-conversation one.
+
 ## Unmeasured is `null`, never `0`
 
 Every figure the plugin cannot derive is `null`, and every cell renders `-` for

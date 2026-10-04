@@ -94,6 +94,9 @@ Every figure below is folded from the recorded session history of one exact
 | `e2e_tps` | the same tokens over the *whole* wait for the first answer — prefill included. This is the figure to choose a model by |
 | `prefill` | share of that wait spent before the first token; per step, then median |
 | `overhead` | time in the step that is neither the wait for the first token nor streaming — the part this host is responsible for |
+| `tools/step` | tool calls per step, counted over *every* step the pair took — how much loop its work involves. A step that called nothing is a measured `0` |
+| `tool_ms/step` | median wall time a step spent waiting for the tools it called, `tool/call` → `tool/result`, over the steps that called at least one; a pair whose steps need no tool shows `-`. It is the tool's time and not the model's, and the per-tool breakdown travels with the row |
+| `turns` | how the conversation ended: `completed`, `error`, `aborted`, `max-tokens`, `interrupted`, and the share that did not complete |
 | `llm_mean` | model wall time per step (`step/start` → `assistant/message`) |
 | `cache%` | cache-read share of total input tokens |
 | `out_tok` | total provider-reported output tokens |
@@ -133,6 +136,14 @@ that settled them.
 - **`overhead` is the only figure about this host**, not the provider. It is small
   in total — about 2% of model time — and it is the column to look at if the
   harness itself, rather than the model, is what feels slow.
+- **Tool time belongs to the loop, not to the model.** `tool_ms/step` measures the
+  tool, and the tool is whatever this model reached for: on this history a `bash`
+  call averages **2.8 s** and an `ask_user_question` **519 s**, and the busiest
+  pair spends **28 328 s** of its 64 922 s of tool time on the second one. Read the
+  column as "what this model's tool usage costs an agent loop", and read the
+  breakdown before reading anything else into it. It does not overlap `overhead`
+  or `llm_mean`: the log closes a step at the model's message and the tool answers
+  after it.
 - **`maxContextTokens` is observed, not declared.** What a route *says* about its
   context window, its default output cap, its input types and its reasoning modes
   is a separate source, shown under **Подробнее** in the panel (see

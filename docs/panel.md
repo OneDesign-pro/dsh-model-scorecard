@@ -30,7 +30,7 @@ no width to stand in.
 ## The table
 
 The table is bounded and scrolls both ways inside its wrapper, under a header
-pinned to the top and a name column pinned to the left: at twenty-one `nowrap`
+pinned to the top and a name column pinned to the left: at twenty-three `nowrap`
 columns a row's identity is the first thing to leave the screen, and a table of
 numbers that no longer says whose numbers they are is not one to sort.
 
@@ -53,10 +53,20 @@ evidence behind them.
 By default the table is seven columns wide — name, status, rating, steps,
 median response time, median end-to-end throughput (`tok/s e2e med`, including
 the first-token wait) and errors per 100 steps (`ош./100`). Streaming
-throughput, the absolute error counts and the rest of the fourteen remaining
+throughput, the absolute error counts and the rest of the sixteen remaining
 columns stay one click away under «все метрики». Errors per 100 steps normalize
 activity, not task difficulty or blame, and neither they nor the rating measure
 answer quality.
+
+**The two tool columns are a group of their own**, at the end of the table and
+after a divider: `llm`, `prefill` and `overhead` describe the *inside* of one
+step, while `tools/step` and `tool time/step` describe the loop between steps.
+Filing them under the same rule would read as one more per-step figure, and the
+number under them is a tool's time rather than the model's — which is what their
+tooltips say, and what `docs/metrics.md` argues. They open in the directions the
+host does (`tools` busiest first, like `steps`; `tool time/step` least first,
+like `overhead`), because a click that opened the opposite way from every other
+heading is what the shared `SORT_DIRS` map exists to prevent.
 
 ### The rating cell
 

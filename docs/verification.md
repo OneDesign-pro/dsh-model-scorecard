@@ -26,17 +26,19 @@ node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragmen
 node tools/verify-tree.mjs   # what the package ships: a reachable lib/, an import that resolves, no leftover
 node tools/verify-payload-consumers.mjs  # every field of the answer has a reader, and every reader a field
 node tools/verify-winner-floor.mjs  # every winner line is picked on one shared floor and says what it decided over
+node tools/verify-tool-timing.mjs  # tool duration: every answered call counted once, and outside the step's LLM span
+node tools/verify-turn-ends.mjs  # turn outcomes: one record per turn that reached a model, and the kinds add up
 node/tools/verify-readme-parity.mjs  # README.md and README_ru.md are still one document
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-03, all nineteen green (`exit=0`):
+Counts as they stand on 2026-10-04, all twenty-one green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
-| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: the answer's page, the cache budget, a group that spans both scopes | 374 |
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: the answer's page, the cache budget, a group that spans both scopes | 376 |
 | `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
-| `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
+| `verify-sort-order.mjs` | every order is total, stable and discriminating, and the two tool orders are exact opposites | 92 |
 | `verify-provider-filter.mjs` | one reading of the filter on every surface | 62 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
 | `verify-metadata.mjs` | bounded lookups, TTL, dedup, disposal, the whitelist | 60 |
@@ -51,16 +53,19 @@ Counts as they stand on 2026-10-03, all nineteen green (`exit=0`):
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 1 019 counted assertions in the sixteen tools that print a count, and 20 of
+That is 1 026 counted assertions in the sixteen tools that print a count, and 20 of
 them are the live walk of `verify-liveness.mjs` — it prints one check per probed pair
 until one answers and three more once one does, so that row reads 20, 21 or 22
-depending on the run (20 on 2026-10-03, which is why the number here is dated). The
-other three assert by exhaustive comparison instead — `verify-official.mjs` field by
+depending on the run (20 on 2026-10-04, which is why the number here is dated). The
+other five assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
-in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
-20 models. `verify-retry.mjs` reads a real corpus and takes its path as its first
-argument, defaulting to `/tmp/dshcorpus` (183 sessions here) — a missing corpus
-is an inability to run, never a pass.
+in the corpus, `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
+20 models, `verify-tool-timing.mjs` over every paired tool call in the corpus, and
+`verify-turn-ends.mjs` over every `turn/end` event in it. The three corpus tools
+take their path as their first argument, defaulting to `/tmp/dshcorpus` (347
+sessions here) — a missing corpus is an inability to run, never a pass, and so is
+an empty one: the directory at that default path had been emptied between two
+runs and `verify-retry.mjs` stayed green over nothing until this was checked.
 
 ## The panel test
 

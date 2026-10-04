@@ -191,9 +191,17 @@ node tools/verify-panel-state.mjs     # every heading's sort key is host-accepte
 node tools/verify-budget.mjs          # a bounded pass is still bounded
 node tools/verify-provider-filter.mjs # a filter reaches the summary lines
 node tools/verify-retry.mjs           # retry identity never goes negative
+node tools/verify-tool-timing.mjs    # every answered tool call counted once, outside the step's LLM span
+node tools/verify-turn-ends.mjs      # one turn record per turn that reached a model
 node tools/verify-configured-rows.mjs # a pair with no history is a row, and is ordered as one
 node tools/verify-readme-parity.mjs  # the two READMEs are still one document
 ```
+
+The three corpus tools (`verify-retry`, `verify-tool-timing`, `verify-turn-ends`)
+read `/tmp/dshcorpus` unless told otherwise. **A missing corpus and an empty one
+are both an inability to run, never a pass** — the directory at that path has
+been emptied between runs before, and a fold over nothing satisfies every
+assertion it has.
 
 A change that alters a number is not done until the tools that assert the old
 numbers have been re-run and the new ones are in the summary. Quote real
