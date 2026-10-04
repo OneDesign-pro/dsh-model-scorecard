@@ -33,6 +33,8 @@
     "icon.svg",
     "locale/",
     "README.md",
+    "README_ru.md",
+    "docs/*.md",
     "COMPARISON.md",
     "package.json"
   ]

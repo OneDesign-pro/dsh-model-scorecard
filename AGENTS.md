@@ -44,6 +44,37 @@ same commit.** Not "later", not "in a follow-up": the same commit. Concretely:
   floor and not a proof: it shows the documents still line up, not that the
   translation is good.
 
+### `docs/` is where the depth lives, and it has no Russian twin
+
+**`README.md` is the front door, and it is written for someone who has never
+seen this plugin.** Install it, find it, understand a column, leave. Prose that
+answers *why a figure is built this way* — the measurement archaeology, the panel's
+internal contracts, the fold's phase chain, the verification inventory — belongs
+in `docs/`, linked from the README's *Further reading* table, not inlined.
+
+| File | What it owns |
+|---|---|
+| `docs/metrics.md` | how each column is measured, and the choices that could have gone the other way |
+| `docs/rating.md` | the rating policy: anchors, weights, population, marks, what moves a score |
+| `docs/panel.md` | the panel: columns, status column, selection rule, archive, saved state |
+| `docs/load-and-cache.md` | the phase chain, the snapshot, the budgets, what is stored where |
+| `docs/verification.md` | what each tool under `tools/` asserts |
+| `docs/migration.md` | the rename from `dsh-model-stats`, in full |
+
+- **`docs/*.md` are English only.** They are the same kind of artifact as the code
+  and the tests, not the same kind as the README a reader opens. Doubling them
+  would double the maintenance for nobody.
+- **A metric's *definition* stays in the README table; its *derivation* may move.**
+  If a new metric needs a paragraph of argument, the row goes into `README.md`
+  and `README_ru.md` and the argument goes into `docs/metrics.md`. Never move a
+  row out of the table.
+- **Keep the README's shape stable.** Install → where to find it → what it
+  measures → how to read it → the API → verification. A newcomer arriving at the
+  bottom of a 1600-line file has already lost.
+- **Do not re-inline what a doc now owns.** If a change to the panel needs an
+  explanation, the explanation goes into `docs/panel.md` and the README keeps one
+  sentence and the link.
+
 ## What this plugin is
 
 A scorecard for every configured `(provider, model)` route, from three sources
