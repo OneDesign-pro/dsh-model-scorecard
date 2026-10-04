@@ -273,6 +273,32 @@ wall-clock difference includes a suspended machine. `gpt-5.6-luna` has a p90 of
 **284 712 ms** from five `write` calls, which is a sleep and not a tool. Medians
 are what the panel shows and they are unaffected.
 
+### What a changed log must not do to this column
+
+The plugin never asks the Harness to publish anything, so it reads whatever the
+log says and has to stay honest when that changes. Three shapes a future release
+could plausibly produce, and what each one costs here:
+
+- **`tool/call` without `turn`/`step`.** The step the call belongs to is then
+  unknown, and a call is not attributed to whoever spoke last — that is the rule
+  a retry record follows too. The call is counted and left out, and every step of
+  that session reads `toolSpans: null` — *unknown*, not the empty array that
+  means "this step called nothing". The row publishes `toolStepsUnknown`.
+- **No step identity anywhere.** The same null, and the reason it is not the same
+  as above: interpolated, every call in a session lands on the key
+  `undefined:undefined` and the first sample to claim it inherits the whole
+  session's tool time. `stepKey` returns `null` for anything that is not a pair
+  of integers, so that key is never issued.
+- **A different spelling of the call id.** `source.callId` and the flat
+  `toolCallId` both appear on every result in this corpus — 7 630 of 7 630 in the
+  80 logs sampled — and both are read, the official one first. Reading one means
+  a Harness that drops it zeroes the whole column silently.
+
+Each of the three is asserted against a synthetic event stream in
+`tools/verify-tool-timing.mjs`, and each was checked by removing the guard and
+watching the tool go red: the middle one hands one step 500 ms of another step's
+tool time, which is the shape this plugin treats as worse than no figure at all.
+
 ## `turns`: how the conversation ended, not how a step did
 
 `turn/end` carries `reason.kind`, and the fold used to parse it and drop it. It is

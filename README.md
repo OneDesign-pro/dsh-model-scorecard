@@ -94,7 +94,7 @@ Every figure below is folded from the recorded session history of one exact
 | `e2e_tps` | the same tokens over the *whole* wait for the first answer — prefill included. This is the figure to choose a model by |
 | `prefill` | share of that wait spent before the first token; per step, then median |
 | `overhead` | time in the step that is neither the wait for the first token nor streaming — the part this host is responsible for |
-| `tools/step` | tool calls per step, counted over *every* step the pair took — how much loop its work involves. A step that called nothing is a measured `0` |
+| `tools/step` | tool calls per step, counted over *every* step the pair took — how much loop its work involves. A step that called nothing is a measured `0`; `toolStepsUnknown` (JSON) counts the steps a log that stops naming the step a call belongs to leaves unmeasured |
 | `tool_ms/step` | median wall time a step spent waiting for the tools it called, `tool/call` → `tool/result`, over the steps that called at least one; a pair whose steps need no tool shows `-`. It is the tool's time and not the model's, and the per-tool breakdown travels with the row |
 | `turns` | how the conversation ended: `completed`, `error`, `aborted`, `max-tokens`, `interrupted`, and the share that did not complete |
 | `llm_mean` | model wall time per step (`step/start` → `assistant/message`) |

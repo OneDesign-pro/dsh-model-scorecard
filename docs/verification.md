@@ -61,7 +61,14 @@ other five assert by exhaustive comparison instead — `verify-official.mjs` fie
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
 20 models, `verify-tool-timing.mjs` over every paired tool call in the corpus, and
-`verify-turn-ends.mjs` over every `turn/end` event in it. The three corpus tools
+`verify-turn-ends.mjs` over every `turn/end` event in it.
+
+`verify-tool-timing.mjs` also folds three synthetic event streams, because the
+shapes they stand for cannot exist in any corpus: a `tool/call` with no step, a
+log with no steps at all, and the flat `toolCallId` spelling of a call id. Each
+guard was checked by removing it and watching the tool go red — without the step
+key's validation one step inherits 500 ms of another step's tool time, which is
+the only shape this plugin considers worse than publishing nothing. The three corpus tools
 take their path as their first argument, defaulting to `/tmp/dshcorpus` (347
 sessions here) — a missing corpus is an inability to run, never a pass, and so is
 an empty one: the directory at that default path had been emptied between two

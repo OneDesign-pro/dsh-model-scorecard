@@ -24,6 +24,8 @@
 //      the spans, and the per-tool breakdown adds back up to the call count.
 //   5. The provider view is the roll-up of its models, as it is for every other
 //      figure.
+//   6. A log that stops naming steps, or that drops one spelling of the call
+//      id, degrades to *unmeasured* rather than to a zero.
 //
 // A directory of session logs, one JSON event per line, is the input — the
 // same corpus `tools/verify-retry.mjs` reads.
@@ -195,6 +197,117 @@ for (const row of report.byProvider) {
       `provider ${row.provider}: the roll-up carries ${row.toolCalls} call(s) where its models carry ${summed}`,
     )
   }
+}
+
+// 6. What a Harness update must not do. The plugin never asks the Harness to
+// change, so the log it reads is the log it gets — and a field it stops
+// publishing has to cost this column its measurement, not quietly turn it into
+// a zero that reads as "this model needs no tools".
+//
+// Three event shapes that a future release could plausibly produce, folded here
+// through the real `foldSession` because the failure is in the fold and no
+// corpus fixture would ever contain it.
+const SHAPE_SOURCE = { provider: 'shape', model: 'shape' }
+
+/**
+ * One answered call. `messageIdentity` and `callIdentity` drop the step
+ * identity from the two sides independently, because the two failures are
+ * different: a log that stops naming a step on the call loses the measurement,
+ * and a log that stops naming it anywhere piles the whole session's tool time
+ * onto whichever step claims the key first.
+ */
+function shapedCall({ callId, name, from, to, spell, messageIdentity = true, callIdentity = true }) {
+  const message = messageIdentity ? { turn: 1, step: 1 } : {}
+  const call = callIdentity ? { turn: 1, step: 1 } : {}
+  return [
+    { type: 'step/start', time: from - 100, data: { ...message } },
+    {
+      type: 'assistant/message',
+      time: from,
+      data: {
+        ...message,
+        message: { source: SHAPE_SOURCE },
+        usage: { outputTokens: 10 },
+        stream: [],
+      },
+    },
+    { type: 'tool/call', time: from, data: { ...call, callId, name: name ?? 'read' } },
+    {
+      type: 'tool/result',
+      time: to,
+      data: {
+        ...call,
+        message:
+          spell === 'flat'
+            ? { role: 'tool', toolCallId: callId, content: [] }
+            : { role: 'tool', source: { kind: 'tool', callId }, content: [] },
+        error: null,
+      },
+    },
+  ]
+}
+
+const unnamed = foldSession(
+  shapedCall({ callId: 'c1', name: 'bash', from: 1_000, to: 1_400, callIdentity: false }),
+  { sessionId: 'shape-unnamed' },
+)
+if (unnamed.samples.length !== 1) {
+  failures.push(`the unnamed-step fixture folded ${unnamed.samples.length} sample(s), not one`)
+} else if (unnamed.samples[0].toolSpans !== null) {
+  failures.push(
+    'a call whose step the log does not name was filed on a step anyway: its spans are ' +
+      `${JSON.stringify(unnamed.samples[0].toolSpans)} where the step must read unknown`,
+  )
+} else {
+  const row = aggregate(unnamed.samples, { sort: 'steps' }).byModel[0]
+  if (row.toolStepsUnknown !== 1 || row.toolCalls !== 0 || row.toolMs.count !== 0) {
+    failures.push(
+      `the unnamed-step row reports unknown=${row.toolStepsUnknown}, calls=${row.toolCalls}, ` +
+        `time n=${row.toolMs.count} where 1/0/0 is the only honest answer`,
+    )
+  }
+}
+
+// The worse half of the same failure: a log that names no step anywhere puts
+// every call in the session under one key, and without the guard the first
+// sample to claim that key inherits the whole session's tool time — a figure
+// that is measured, confident and wrong, which is the only shape this plugin
+// treats as worse than no figure at all.
+const anonymous = foldSession(
+  [
+    ...shapedCall({ callId: 'c0a', name: 'bash', from: 500, to: 700, messageIdentity: false, callIdentity: false }),
+    ...shapedCall({ callId: 'c0b', name: 'read', from: 800, to: 1_100, messageIdentity: false, callIdentity: false }),
+  ],
+  { sessionId: 'shape-anonymous' },
+)
+for (const sample of anonymous.samples) {
+  if (sample.toolSpans === null) continue
+  failures.push(
+    `a step in a log that names no steps carries ${JSON.stringify(sample.toolSpans)} ` +
+      'of another step’s tool time',
+  )
+}
+
+const flat = foldSession(
+  shapedCall({ callId: 'c2', name: 'bash', from: 2_000, to: 2_900, spell: 'flat' }),
+  { sessionId: 'shape-flat' },
+)
+if (flat.samples[0]?.toolSpans?.[0]?.ms !== 900) {
+  failures.push(
+    'the flat `toolCallId` spelling of a call id was not paired: ' +
+      `${JSON.stringify(flat.samples[0]?.toolSpans)} where one 900 ms span was expected`,
+  )
+}
+
+const control = foldSession(
+  shapedCall({ callId: 'c3', name: 'bash', from: 3_000, to: 3_300 }),
+  { sessionId: 'shape-control' },
+)
+if (control.samples[0]?.toolSpans?.[0]?.ms !== 300 || control.samples[0].toolStepsUnknown !== undefined) {
+  failures.push(
+    'the guard broke the ordinary case: ' +
+      `${JSON.stringify(control.samples[0]?.toolSpans)} where one 300 ms span was expected`,
+  )
 }
 
 console.log(`corpus: ${files.length} log(s), ${samples.length} step sample(s)`)
