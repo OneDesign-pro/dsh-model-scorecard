@@ -11,14 +11,16 @@
 //
 // So the contract asserted here is the class, not the instance:
 //
-//   1. statically — every summary line that names a winner (`fastest …:` /
-//      `slowest …:`) is built by `pickWinner` and carries its denominator,
-//      `pick()` is not reachable from `renderReportText` any more, and the
-//      floor constant is defined exactly once. Add a fifth winner line without
-//      the helper, or re-grow an inline `count >= 20`, and the tool names it;
-//   2. behaviourally — on a fixture tuned so that every shortcut is tempting
-//      (a one-step model is the true fastest first token, a nineteen-sample row
-//      the true fastest decode), the floor holds on all four lines;
+//   1. structurally — there is exactly one place a winner line can be written:
+//      the `WINNER_LINES` table, printed by `winnerLines()`, which is the only
+//      caller of `pickWinner` and of `winnerNote`. The renderer holds no winner
+//      label of its own and calls the helper once, so a fifth line is a fifth
+//      entry rather than a fifth block that could be written without its
+//      denominator. Every entry is walked here and every one of them must carry
+//      its denominator on a fixture tuned so that every shortcut is tempting;
+//   2. behaviourally — on that fixture the floor holds on all four lines: a
+//      one-step model is the true fastest first token, a nineteen-sample row the
+//      true fastest decode;
 //   3. honestly — a pick under the floor is *said*, not suppressed or
 //      polished: the line stays in the report marked "under the floor" (the
 //      e2e line used to go silent there, which a reader cannot tell apart
@@ -28,7 +30,7 @@
 // Usage: node tools/verify-winner-floor.mjs
 
 import { aggregate } from '../lib/fold.js'
-import { MIN_WINNER_SAMPLES, renderReportText } from '../lib/collect.js'
+import { MIN_WINNER_SAMPLES, WINNER_LINES, renderReportText } from '../lib/collect.js'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -42,41 +44,100 @@ function check(label, condition, detail = '') {
 const lineWith = (text, prefix) => text.split('\n').find((line) => line.startsWith(prefix))
 const allLinesWith = (text, prefix) => text.split('\n').filter((line) => line.startsWith(prefix))
 
-console.log('--- статически: сводка знает только pickWinner ---')
+console.log('--- статически: строку-победителя пишет только winnerLines ---')
 
 const source = readFileSync(
   new URL('../lib/collect.js', import.meta.url),
   'utf8',
 )
-// The body of the text renderer, bounded by the next top-level `function`.
-const rendererStart = source.indexOf('export function renderReportText')
-const renderer = source.slice(
-  rendererStart,
-  source.slice(rendererStart + 10).search(/\nfunction [\w$]+\(/) + rendererStart + 10,
-)
+/** The body of one top-level declaration, bounded by the next one. */
+const bodyOf = (marker) => {
+  const start = source.indexOf(marker)
+  if (start === -1) return ''
+  const rest = source.slice(start + marker.length)
+  const end = rest.search(/\n(?:export )?(?:function|const) [\w$]+/)
+  return source.slice(start, start + marker.length + (end === -1 ? rest.length : end))
+}
+const renderer = bodyOf('export function renderReportText')
+const writer = bodyOf('function winnerLines(')
+// The table declaration, from `WINNER_LINES` to the `]` that closes it.
+const tableStart = source.indexOf('export const WINNER_LINES = [')
+const tableEnd = source.indexOf('\n]\n', tableStart)
+const table = source.slice(tableStart, tableEnd)
 
-// A winner line is one that starts `fastest …:` or `slowest …:` — the four the
-// report has, and any fifth the same class would produce. Every one of them
-// must be built through the helper that enforces the floor; a raw `pick(` in
-// the renderer is the regression this catches, because `pick` is the floor-free
-// primitive and it now lives below the renderer, reachable only from the
-// helper.
-const winnerPushes = [...renderer.matchAll(/`(fastest|slowest) ([\w ]+):/g)]
+// A winner line is one that names a winner. There are four, and the point of
+// the table is that a fifth is a fifth *entry*: the renderer cannot write one
+// because it holds no such string at all, and every entry is printed by the one
+// loop in `winnerLines()`.
+//
+// Three matches, because "a label" can hide in three places and the old guard
+// only looked at one of them. `declared` is the table's own `label:` field;
+// `inline` is a hand-written line, a template literal that opens with the label;
+// `mentioned` is the label as a bare string, which is where a line written as
+// `` const l = 'fastest cache' `` keeps it — the shape that prints a fifth
+// winner line with no denominator while every literal-search stays green.
+const declared = (text) => [...text.matchAll(/label:\s*'((?:fastest|slowest) [\w ]+)'/g)].map((m) => m[1])
+const inline = (text) => [...text.matchAll(/`((?:fastest|slowest) [\w ]+):/g)].map((m) => m[1])
+const mentioned = (text) => [...text.matchAll(/'((?:fastest|slowest) [\w ]+)'/g)].map((m) => m[1])
+const tableLabels = declared(table)
 check(
-  'сводка называет победителей ровно четыре раза',
-  winnerPushes.length === 4,
-  winnerPushes.map((m) => `${m[1]} ${m[2]}`).join(' | '),
+  'в рендерере нет ни одной метки-победителя',
+  declared(renderer).length === 0 && inline(renderer).length === 0 && mentioned(renderer).length === 0,
+  [...declared(renderer), ...inline(renderer), ...mentioned(renderer)].join(' | ') || 'ни одной',
 )
-const helperCalls = [...renderer.matchAll(/pickWinner\(/g)]
 check(
-  'все четыре строки идут через pickWinner',
-  helperCalls.length === 4 && renderer.match(/`(fastest|slowest) [\w ]+:/g).length === 4,
-  `pickWinner( в сводке: ${helperCalls.length}`,
+  'рендерер зовёт winnerLines ровно один раз',
+  (renderer.match(/winnerLines\(/g) ?? []).length === 1,
+  `winnerLines( в рендерере: ${(renderer.match(/winnerLines\(/g) ?? []).length}`,
 )
-check('pick( в текстовом рендере недоступен', !/(^|[^a-zA-Z])pick\(/.test(renderer))
 check(
-  'каждая строка-победитель несёт знаменатель',
-  winnerPushes.every((m) => renderer.slice(m.index, m.index + 900).includes('winnerNote(')),
+  'ни pick(, ни pickWinner( в рендерере',
+  !/(^|[^a-zA-Z])pick\(/.test(renderer) && !renderer.includes('pickWinner('),
+)
+// Every bare mention of a winner label in the file has to be inside the table —
+// the table's own `skipIfSameRowAs` points at one, and that is the only other
+// mention a correct file has. This is the check that fails on a label smuggled
+// into the renderer as a variable, because a variable is exactly a bare string.
+const strays = [...source.matchAll(/'(?:fastest|slowest) [\w ]+'/g)].filter(
+  (m) => m.index < tableStart || m.index > tableEnd,
+)
+check(
+  'ни одна метка-победитель не живёт вне таблицы',
+  strays.length === 0,
+  strays.length === 0 ? `все в таблице: ${mentioned(table).join(' | ')}` : strays.map((m) => m[0]).join(' | '),
+)
+check(
+  'в таблице ровно четыре строки, и это те же, что экспортированы',
+  tableLabels.length === 4 &&
+    WINNER_LINES.length === 4 &&
+    tableLabels.join('|') === WINNER_LINES.map((line) => line.label).join('|'),
+  tableLabels.join(' | '),
+)
+check(
+  'метки в таблице не повторяются',
+  new Set(WINNER_LINES.map((line) => line.label)).size === WINNER_LINES.length,
+)
+check(
+  'у каждой строки есть фигура, правило и статистика',
+  WINNER_LINES.every(
+    (line) =>
+      typeof line.figure === 'function' &&
+      typeof line.better === 'function' &&
+      typeof line.stat === 'string' &&
+      typeof line.label === 'string',
+  ),
+  WINNER_LINES.map((line) => `${line.label}←${line.stat}`).join(' | '),
+)
+check(
+  'у winnerLines один pickWinner и один winnerNote, и он не трогает lines',
+  (writer.match(/pickWinner\(/g) ?? []).length === 1 &&
+    (writer.match(/winnerNote\(/g) ?? []).length === 1 &&
+    !/\blines\b/.test(writer),
+  `pickWinner( ${(writer.match(/pickWinner\(/g) ?? []).length}, winnerNote( ${(writer.match(/winnerNote\(/g) ?? []).length}`,
+)
+check(
+  'pick( недостижим и из winnerLines',
+  !/(^|[^a-zA-Z])pick\(/.test(writer),
 )
 check(
   'пол определён ровно один раз',
@@ -84,11 +145,15 @@ check(
     source.includes(`export const MIN_WINNER_SAMPLES = ${MIN_WINNER_SAMPLES}`),
 )
 // The inline form of the old bug: a count gate written at a call site instead
-// of in the helper. One remains, and it is the helper's own.
+// of in the helper. One remains, and it is the helper's own. Both spellings of
+// the zero-default are counted, because `|| 0` is the same gate written a
+// different way, and a guard that knows one spelling is a guard that can be
+// walked past by retyping it.
+const gates = [...source.matchAll(/\.count\s*(?:\?\?|\|\|)\s*0\)\s*>=\s*[A-Za-z\d_]+/g)]
 check(
   'счётный пол в коде ровно один',
-  (source.match(/\.count \?\? 0\) >=/g) ?? []).length === 1 &&
-    source.indexOf('.count ?? 0) >=') > source.indexOf('function pickWinner'),
+  gates.length === 1 && source.indexOf(gates[0][0]) > source.indexOf('function pickWinner'),
+  `вхождений: ${gates.length}${gates.length === 1 ? ` (${gates[0][0]})` : ''}`,
 )
 check(
   'старого имени нет',
@@ -200,6 +265,23 @@ check(
   'пол на месте: 25 ttft-шагов не делают модель пригодной для скорости',
   (t2 ?? '').includes('e-short') === false,
   t2,
+)
+// The class, walked over the table rather than over four known labels: every
+// line `WINNER_LINES` declares is printed by `winnerLines()` and every one of
+// them says what it decided over, exactly once — a line that printed two
+// denominators or a hand-written one inside its `figure` would be claiming
+// something the statistic never said. A fifth entry is therefore covered by this
+// loop on the day it is written, which is the whole point of the table; the
+// four hand-written checks above stay as a readable account of what each line is
+// *for*, and this one is what would fail if a new entry arrived without it.
+const counted = WINNER_LINES.map((line) => [
+  line.label,
+  (lineWith(mixed, `${line.label}:`) ?? '').match(/over \d+ sample\(s\)/g)?.length ?? 0,
+])
+check(
+  'каждая строка из таблицы печатается и несёт ровно один знаменатель',
+  counted.every(([, times]) => times === 1),
+  counted.map(([label, times]) => `${label}×${times}`).join(' | '),
 )
 
 console.log('\n--- честность: под полом — сказано, а не промолчано ---')

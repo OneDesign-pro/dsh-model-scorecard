@@ -1561,7 +1561,7 @@ Counts as they stand on 2026-10-03, all nineteen green (`exit=0`):
 | `verify-budget.mjs` | the collection contract, and the panel's phase chain | 54 |
 | `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
-| `verify-winner-floor.mjs` | that every winner line is picked on one shared floor and prints what it decided over | 26 |
+| `verify-winner-floor.mjs` | that every winner line is picked on one shared floor and prints what it decided over | 32 |
 | `verify-payload-consumers.mjs` | that every field of the answer has a reader, and every reader a field | 23 |
 | `verify-liveness.mjs` | the catalog join and the state classification; a live walk, so its count moves with what the stack answers | 20 |
 | `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
@@ -1569,7 +1569,7 @@ Counts as they stand on 2026-10-03, all nineteen green (`exit=0`):
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 1 013 counted assertions in the sixteen tools that print a count, and 20 of
+That is 1 019 counted assertions in the sixteen tools that print a count, and 20 of
 them are the live walk of `verify-liveness.mjs` — it prints one check per probed pair
 until one answers and three more once one does, so that row reads 20, 21 or 22
 depending on the run (20 on 2026-10-03, which is why the number here is dated). The
