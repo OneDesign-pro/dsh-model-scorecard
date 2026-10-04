@@ -148,7 +148,7 @@ console.log(
     ? 'тот же ответ'
     : 'ОТЛИЧАЕТСЯ',
 )
-console.log('[панель предлагает провайдеров]', byRepeated.json.providerList.length, 'из', byRepeated.json.totals.providers)
+console.log('[панель предлагает провайдеров]', byRepeated.json.catalog.length, 'из', byRepeated.json.totals.providers)
 console.log('[после фильтра]', JSON.stringify(byRepeated.json.shown), '| применён:', byRepeated.json.providers.join('+'))
 
 console.log('\n=== panel route GET /api/model-scorecard ===')

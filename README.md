@@ -1147,9 +1147,18 @@ Four fields of the answer exist for the selection:
 `catalog` is built from the **unfiltered** report and the whole configuration, so it
 names the models the reader has not marked as well as the ones they have: a catalog
 read off the rows being sent could only ever offer what is already ticked. `totals`
-and `providerList` stay whole-history figures for the same reason — a total that
-moved with the selection would no longer be a total — while `shown` counts what the
-selection kept, before the page cut it.
+stays a whole-history figure for the same reason — a total that moved with the
+selection would no longer be a total — while `shown` counts what the selection kept,
+before the page cut it.
+
+Every field of the answer has a reader, and `tools/verify-payload-consumers.mjs` is
+what proves it: it calls `toPanelPayload` over a fixture for each branch and fails
+on any key `client.js` never names. `providerList` — the same providers with the
+archive grading applied — rode on every answer until that tool found it, kept alive
+by the test that asserted it and read by nothing; `complete`, `fromSnapshot`,
+`generatedAt` and `empty` went with it, the first three already carried by
+`pending`, `provenance` and `snapshotAt`, the last one a restatement of
+`rows.length === 0`.
 
 > The client half is registered when the page boots: after the plugin is first
 > installed or its `dsh.client` manifest changes — the `inject` list included —
@@ -1264,10 +1273,14 @@ models came out as two rows and `providers` counted models.
 
 The provider filter has its own contract test in `tools/verify-provider-filter.mjs`:
 one reading of it through the query string, the panel payload and the agent's
-text, plus the three properties it rests on — that `providerList` names the whole
+text, plus the three properties it rests on — that `catalog` names the whole
 history rather than the rows on screen, that it drops the providers whose every
-row the archive holds and offers them again with the archive on, and that `shown`
-counts what the filter left rather than the page the limit cut.
+row the archive holds and offers them again with the archive on, and that `coverage`
+counts the models the stored rules hold rather than the page the limit cut. The
+last check in that file closes the loop the other two open: the catalog and the
+coverage the payload carries are compared against `selectionCatalog` and
+`resolveSelection` called directly, so the checkbox tree and the numbers printed
+beside a provider row are asserted to be counting the same set of models.
 
 The selection has the other half of that, in `tools/verify-selection.mjs`. It is
 built on a corpus with the two shapes a selection is easy to get wrong about — two
@@ -1343,6 +1356,20 @@ file and a module at the root other than `client.js`. It is the inventory the
 manual one was, run every time: the manual one found three of those four files
 and missed the fourth, which is the whole argument for the file.
 
+The answer has its own inventory, `tools/verify-payload-consumers.mjs`, for the
+same reason and the same class of blindness. `toPanelPayload` emitted
+`providerList`, `complete`, `fromSnapshot`, `generatedAt` and `empty`; `client.js`
+named none of the five; and `tools/verify-provider-filter.mjs` spent thirteen lines
+asserting the first, which is what kept it alive — the test was its only reader,
+and a test asserting a field nobody reads passes forever. The test calls
+`toPanelPayload` over a fixture for each branch (a selection, an archive on and
+off, a scoped answer, an empty history, a cut page, the provider view) and fails
+on any key the panel does not name, then runs the other way and fails on any name
+the panel reads that the payload never had. Both directions strip comments and
+string literals first, so a key that survives only inside a translation dictionary
+does not count as a reader — which is exactly how `empty` looked alive: it is
+named twice in `client.js`, both times as `'models.empty'`.
+
 ## Usage
 
 **Panel:** Plugins → the `dsh-model-scorecard` bundle → its page (see *Where to find
@@ -1382,6 +1409,15 @@ the fastest decode, and every model that produced errors.
   the fastest model **of the filtered set**, not of the whole history. The
   unfiltered set counts, not the page the limit cut off, so raising `limit` never
   changes which model is the fastest.
+- Every winner line prints what it decided over: `fastest first token:
+  local-uns/Ornith-1.5-9B-MLX-8bit (46 ms) — over 28 sample(s)` on this
+  machine's store. A median from two steps is a coin toss wearing a confident
+  number, so a line picks its winner among rows carrying at least 20 samples of
+  that line's own figure — the floor applies to all four lines, not only the
+  one that learned it the hard way. When no row reaches it the line is still
+  printed, marked `under the 20-sample floor`, because a missing line cannot be
+  told apart from "no model here is the fastest"; when exactly one row clears
+  it among several candidates, the line says `the only row above the floor`.
 - `sort: "rating"` orders by the technical score and puts the unrated rows at
   the bottom in both directions, like every other missing figure. The `~` and `*`
   marks lead the figure in the cell, and the line under the table names both what
@@ -1507,32 +1543,36 @@ node tools/verify-official.mjs   # field-by-field cross-check against sessionSta
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model
 node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragments
 node tools/verify-tree.mjs   # what the package ships: a reachable lib/, an import that resolves, no leftover
+node tools/verify-payload-consumers.mjs  # every field of the answer has a reader, and every reader a field
+node tools/verify-winner-floor.mjs  # every winner line is picked on one shared floor and says what it decided over
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-02, all seventeen green (`exit=0`):
+Counts as they stand on 2026-10-03, all nineteen green (`exit=0`):
 
 | tool | what it counts | checks |
 |---|---|---|
-| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: the answer's page, the cache budget, a group that spans both scopes | 373 |
+| `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: the answer's page, the cache budget, a group that spans both scopes | 374 |
 | `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
 | `verify-sort-order.mjs` | every order is total, stable and discriminating | 87 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
 | `verify-metadata.mjs` | bounded lookups, TTL, dedup, disposal, the whitelist | 60 |
-| `verify-provider-filter.mjs` | one reading of the filter on every surface | 58 |
+| `verify-provider-filter.mjs` | one reading of the filter on every surface | 62 |
+| `verify-budget.mjs` | the collection contract, and the panel's phase chain | 54 |
 | `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
-| `verify-budget.mjs` | the collection contract, and the panel's phase chain | 47 |
-| `verify-liveness.mjs` | the catalog join and the state classification; a live walk, so its count moves with what the stack answers | 22 |
+| `verify-winner-floor.mjs` | that every winner line is picked on one shared floor and prints what it decided over | 26 |
+| `verify-payload-consumers.mjs` | that every field of the answer has a reader, and every reader a field | 23 |
+| `verify-liveness.mjs` | the catalog join and the state classification; a live walk, so its count moves with what the stack answers | 20 |
 | `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 954 counted assertions in the fourteen tools that print a count, and 22 of
+That is 1 013 counted assertions in the sixteen tools that print a count, and 20 of
 them are the live walk of `verify-liveness.mjs` — it prints one check per probed pair
 until one answers and three more once one does, so that row reads 20, 21 or 22
-depending on the run (22 on 2026-10-02, which is why the number here is dated). The
+depending on the run (20 on 2026-10-03, which is why the number here is dated). The
 other three assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
 in the corpus, and `verify-tokens-per-fragment.mjs` over 21 715 folded steps of

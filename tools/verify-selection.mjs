@@ -710,7 +710,7 @@ console.log('\n--- пустой выбор ---')
 const emptySelection = await panelPayload({ selectionRules: noneRules })
 check(
   'пустой выбор — пустая таблица, а не вся история',
-  emptySelection.rows.length === 0 && emptySelection.empty === true,
+  emptySelection.rows.length === 0 && emptySelection.totals !== null,
   `${emptySelection.rows.length} строк`,
 )
 check(
@@ -968,8 +968,8 @@ const sameQuery = await call('/api/model-scorecard/query', {
 })
 check(
   'пустой выбор через HTTP — пустая таблица',
-  sameQuery.status === 200 && sameQuery.json.rows.length === 0 && sameQuery.json.empty === true,
-  JSON.stringify({ rows: sameQuery.json.rows.length, empty: sameQuery.json.empty }),
+  sameQuery.status === 200 && sameQuery.json.rows.length === 0 && sameQuery.json.ok === true,
+  JSON.stringify({ rows: sameQuery.json.rows.length, ok: sameQuery.json.ok }),
 )
 
 const archiveQuery = await call('/api/model-scorecard/query', {

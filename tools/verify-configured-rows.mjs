@@ -305,15 +305,14 @@ check(
   `${providers(byProvider)} / ${JSON.stringify(byProvider.rows.at(-1)?.steps)}`,
 )
 check(
-  'список провайдеров для фильтра добирает провайдера, которого история не знает',
-  byProvider.providerList.map((entry) => `${entry.provider}:${entry.steps}`).join() ===
-    'a:11,b:4,c:0',
-  byProvider.providerList.map((entry) => `${entry.provider}:${entry.steps}`).join(' | '),
+  'каталог добирает провайдера, которого история не знает',
+  byProvider.catalog.map((group) => `${group.provider}:${group.models.length}`).join() === 'a:3,b:2,c:1',
+  byProvider.catalog.map((g) => `${g.provider}:${g.models.length}`).join(' | '),
 )
 check(
   'провайдер, который в истории есть, не задваивается и не теряет шаги',
-  base.providerList.map((entry) => `${entry.provider}:${entry.steps}`).join() === 'a:11,b:4,c:0',
-  base.providerList.map((entry) => `${entry.provider}:${entry.steps}`).join(' | '),
+  base.catalog.map((group) => `${group.provider}:${group.models.reduce((sum, m) => sum + m.steps, 0)}`).join() === 'a:11,b:4,c:0',
+  base.catalog.map((g) => `${g.provider}:${g.models.reduce((sum, m) => sum + m.steps, 0)}`).join(' | '),
 )
 
 console.log('\n--- пустая история и неизвестная конфигурация ---')
@@ -324,10 +323,10 @@ const empty = toPanelPayload(
 )
 check(
   'пустая история при живой конфигурации отвечает таблицей, а не пустотой',
-  empty.empty === false &&
+  empty.rows.length > 0 &&
     models(empty) === 'a-fast < a-new < a-old < b-new < b-slow < c-new' &&
     empty.rows.every((entry) => entry.noStats === true),
-  `${models(empty)} / empty=${empty.empty}`,
+  `${models(empty)} / строк ${empty.rows.length}`,
 )
 check(
   'итогов по истории в таком ответе нет: нули читались бы как посчитанная история',
@@ -354,8 +353,8 @@ const emptyNoCatalog = toPanelPayload(
 )
 check(
   'пустая история без каталога остаётся пустой таблицей',
-  emptyNoCatalog.empty === true && emptyNoCatalog.rows.length === 0,
-  `row=${emptyNoCatalog.rows.length}`,
+  emptyNoCatalog.rows.length === 0 && emptyNoCatalog.totals === null,
+  `строк ${emptyNoCatalog.rows.length}, totals=${JSON.stringify(emptyNoCatalog.totals)}`,
 )
 
 console.log('\n--- текстовая таблица агента не выросла ---')

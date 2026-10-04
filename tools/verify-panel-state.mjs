@@ -555,38 +555,20 @@ function cacheKey(sort, dir, view, { selection = DEFAULT_SELECTION, archived = f
 function payload(
   sort,
   rows,
-  { providers = [], providerList = null, archive = null, noStats = null, catalog = CATALOG, selection = DEFAULT_SELECTION, coverage = null, truncated = false } = {},
+  { providers = [], archive = null, noStats = null, catalog = CATALOG, selection = DEFAULT_SELECTION, coverage = null, truncated = false } = {},
 ) {
   return {
     ok: true,
-    empty: false,
     scanned: rows.length,
     skipped: 0,
     pending: 0,
-    complete: true,
     snapshotAt: 1_790_549_902_860,
     readNow: 0,
     reused: rows.length,
-    generatedAt: 1_790_549_902_900,
-    fromSnapshot: true,
-    totals: { steps: 10, errors: 0, models: rows.length, providers: providerList?.length ?? rows.length },
+    totals: { steps: 10, errors: 0, models: rows.length, providers: [...new Set(rows.map((entry) => entry.provider))].length },
     sort,
     view: 'model',
     providers,
-    // What the host offers the filter, taken from the whole history and not from
-    // the rows it is sending: the filtered rows are exactly the ones that are
-    // missing from that list.
-    providerList:
-      providerList ??
-      [...new Set(rows.map((entry) => entry.provider))]
-        .sort()
-        .map((provider) => ({
-          provider,
-          models: rows.filter((entry) => entry.provider === provider).length,
-          steps: rows.filter((entry) => entry.provider === provider).reduce((sum, r) => sum + r.steps, 0),
-          errors: 0,
-          lastSeen: 0,
-        })),
     shown: { models: rows.length, steps: rows.reduce((sum, r) => sum + r.steps, 0), errors: 0 },
     // What the archive holds under this filter, or `null` for a host that could
     // not read the configuration. The two are different answers and the panel
@@ -615,22 +597,13 @@ function payload(
  * panel reads the echo, not the rows, to decide whether the table is a subset of
  * the history worth reporting in the footer.
  */
-function filtered(sort, rows, names, { providerList = PROVIDER_LIST } = {}) {
+function filtered(sort, rows, names) {
   const providers = {}
   for (const name of names) providers[name] = 'all'
   return payload(sort, rows.filter((entry) => names.includes(entry.provider)), {
-    providerList,
     selection: rules({ providers }),
   })
 }
-
-// The two orders share no row in first place, so a table that failed to follow
-// the sort cannot pass by accident.
-const PROVIDER_LIST = [
-  { provider: 'codex', models: 1, steps: 106, errors: 0, lastSeen: 3000 },
-  { provider: 'local-uns', models: 1, steps: 28, errors: 0, lastSeen: 1000 },
-  { provider: 'openrouter', models: 1, steps: 5, errors: 0, lastSeen: 2000 },
-]
 
 const byTtft = payload(
   'ttft',
@@ -639,7 +612,7 @@ const byTtft = payload(
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, tpsMedian: 32.2, lastSeen: 2000 }),
     row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, tpsMedian: 34.7, lastSeen: 3000 }),
   ],
-  { providerList: PROVIDER_LIST },
+  {},
 )
 const bySpeed = payload(
   'speed',
@@ -648,7 +621,7 @@ const bySpeed = payload(
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, tpsMedian: 32.2, lastSeen: 2000 }),
     row('local-uns', 'Ornith-9B', { steps: 28, ttftMedian: 46, tpsMedian: 0.5, lastSeen: 1000 }),
   ],
-  { providerList: PROVIDER_LIST },
+  {},
 )
 
 // --- mounting the real panel ------------------------------------------------
@@ -886,7 +859,7 @@ console.log('--- краткий набор и группы ---')
   const measured = payload('ttft', [
     row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, errorRate: 8 }),
     row('local-uns', 'Ornith-9B', { steps: 28, ttftMedian: 46, errorRate: 2 }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const bars = mountPanel({ prefs: { columnsAll: false } })
   await bars.pump()
   bars.requests[0].answer(measured)
@@ -949,7 +922,7 @@ function barsOf(tree, key) {
     // whose newest usable measurement is forty days old. It keeps its score —
     // freshness is descriptive — and wears the age mark.
     row('codex', 'gpt-5-old', { steps: 40, ttftMedian: 2000, rating: rated(61, { anchor: Date.now() - 40 * 86_400_000 }) }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
 
   const view = mountPanel({ prefs: { columnsAll: true } })
   await view.pump()
@@ -1026,7 +999,7 @@ function barsOf(tree, key) {
           ttftMedian: 2000,
           rating: rated(61, { anchor: FROZEN - ageMs }),
         }),
-      ], { providerList: PROVIDER_LIST }),
+      ], {}),
     )
     const tree = await view.pump()
     const column = headings(tree).findIndex((th) => th.props.key === 'rating')
@@ -1057,7 +1030,7 @@ function barsOf(tree, key) {
   const old = payload('ttft', [
     legacy(row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500 })),
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, rating: null, routeMetadata: null }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: old } }, prefs: { columnsAll: true } })
   let tree = view.render()
   const printed = () =>
@@ -1107,7 +1080,7 @@ function barsOf(tree, key) {
   const ranked = payload('rating', [
     row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, rating: { version: 'technical-v1', score: 72.2, reason: null, provisional: false, qualifiedSamples: 24, sessions: 4 } }),
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, rating: { version: 'technical-v1', score: 48.5, reason: null, provisional: false, qualifiedSamples: 24, sessions: 4 } }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ entries: { [cacheKey('ttft', 'asc', 'model')]: { at: Date.now(), data: byTtft } } })
   let tree = await view.pump()
   check('до щелчка столбец рейтинга не сортирует', ariaSort(tree, 'rating') === 'none')
@@ -1168,7 +1141,7 @@ function barsOf(tree, key) {
       rating: { version: 'technical-v1', score: 40, reason: null, provisional: false, anchor: null, qualifiedSamples: 12, answeredSamples: 12, excludedRetried: 0, excludedInterrupted: 0, effectiveSamples: 12, sessions: 2, coverage: 1, inputs: {}, components: {} },
       routeMetadata: { source: 'dsh-adapter', checkedAt: Date.now(), contextWindow: null, defaultMaxTokens: null, inputModalities: null, reasoningEfforts: null, defaultReasoningEffort: null },
     }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
 
   const view = mountPanel({ prefs: { columnsAll: true } })
   await view.pump()
@@ -1252,7 +1225,7 @@ function barsOf(tree, key) {
       rating: { version: 'technical-v1', score: 72.23415362384071, reason: null, provisional: false, anchor: Date.now(), qualifiedSamples: 24, answeredSamples: 26, excludedRetried: 2, excludedInterrupted: 1, effectiveSamples: 21.5, sessions: 4, coverage: 24 / 26, inputs: { tpsMedian: 41.25, ttftMedianMs: 3180, ttftP90Ms: 9420 }, components: { throughput: 0.292, latency: 0.611, tailLatency: 0.614 } },
       routeMetadata: route,
     }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ entries: { [cacheKey('rating', 'desc', 'model')]: { at: Date.now(), data: en } }, prefs: { columnsAll: true, sort: 'rating', dir: 'desc' }, locale: 'en' })
   const tree = view.render()
   check('английский рейтинг — с точкой, как в en', columnCells(tree, 'rating')[0]?.[0].startsWith('72.2'), JSON.stringify(columnCells(tree, 'rating')))
@@ -1293,7 +1266,7 @@ function barsOf(tree, key) {
       components: { throughput: 0.3, latency: 0.6, tailLatency: 0.6 },
     },
   })
-  const data = payload('rating', [marked], { providerList: PROVIDER_LIST })
+  const data = payload('rating', [marked], {})
   const cache = { [cacheKey('rating', 'desc', 'model')]: { at: Date.now(), data } }
   // Легенда свёрнута `hidden`, пока её не попросили, и `legendText` читает ровно то,
   // что читатель получает, нажав «Как читать таблицу».
@@ -1353,7 +1326,7 @@ console.log('--- полоска под числом: доля от наибол�
     // one row, so three different columns cannot be read off one another: a bar that
     // used the wrong metric would show up in the widths below.
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, e2eTpsMedian: 80, errorRate: 16 }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ prefs: { columnsAll: true } })
   await view.pump()
   view.requests[0].answer(measured)
@@ -1418,7 +1391,7 @@ console.log('--- полоска под числом: доля от наибол�
   const unmeasured = payload('ttft', [
     row('codex', 'gpt-6-astra', { ttftMedian: 3500 }),
     row('openrouter', 'glm-5.3-flash', { ttftMedian: 985 }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ prefs: { columnsAll: false } })
   await view.pump()
   view.requests[0].answer(unmeasured)
@@ -1434,7 +1407,7 @@ console.log('--- полоска под числом: доля от наибол�
   // One row is nothing to be a share of, in every column at once.
   const single = payload('ttft', [
     row('codex', 'gpt-6-astra', { ttftMedian: 3500, e2eTpsMedian: 40, errorRate: 8 }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ prefs: { columnsAll: false } })
   await view.pump()
   view.requests[0].answer(single)
@@ -1456,7 +1429,7 @@ console.log('--- полоска под числом: доля от наибол�
   const scaled = payload('ttft', [
     row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, e2eTpsMedian: 40, errorRate: 8, retryRate: 0.1 }),
     row('openrouter', 'glm-5.3-flash', { steps: 5, ttftMedian: 985, e2eTpsMedian: 80, errorRate: 0.1, retryRate: 0.4 }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({ prefs: { columnsAll: true } })
   await view.pump()
   view.requests[0].answer(scaled)
@@ -2045,7 +2018,7 @@ const cacheBytes = (entries) =>
       Array.from({ length: count }, (_, index) =>
         row('bulk', `m-${index}`, { steps: index + 1, ttftMedian: 900 + index, tpsMedian: 30 + index }),
       ),
-      { providerList: PROVIDER_LIST },
+      {},
     )
   const view = mountPanel()
   let tree = await view.pump()
@@ -2158,7 +2131,7 @@ console.log('\n--- архив: модели вне текущей конфигу
 // offered only where the host could grade at all, and a row that came back with
 // the flag says out loud which kind it is.
 const RETIRED = row('codex', 'gpt-6-astra', { steps: 106, ttftMedian: 3500, tpsMedian: 34.7, lastSeen: 3000, archived: true })
-const withArchive = (rows, archive) => payload('ttft', rows, { providerList: PROVIDER_LIST, archive })
+const withArchive = (rows, archive) => payload('ttft', rows, { archive })
 {
   const view = mountPanel()
   let tree = await view.pump()
@@ -2249,7 +2222,6 @@ const MIXED_RETIRED = row('codex', 'gpt-6-retired', {
  */
 const mixedPayload = (rows, selection = DEFAULT_SELECTION) =>
   payload('ttft', rows, {
-    providerList: PROVIDER_LIST,
     archive: { rows: 1, steps: 40, shown: true },
     catalog: MIXED_CATALOG,
     selection,
@@ -2345,8 +2317,8 @@ const mixedPayload = (rows, selection = DEFAULT_SELECTION) =>
 // offer. A checkbox that could only ever read zero would be a claim about the
 // configuration this host is in no position to make.
 for (const [label, answer] of [
-  ['хост до появления поля', payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST })],
-  ['хост без каталога', payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, archive: null })],
+  ['хост до появления поля', payload('ttft', byTtft.rows, {})],
+  ['хост без каталога', payload('ttft', byTtft.rows, { archive: null })],
 ]) {
   const view = mountPanel()
   let tree = await view.pump()
@@ -2359,7 +2331,7 @@ for (const [label, answer] of [
 {
   const view = mountPanel()
   let tree = await view.pump()
-  view.requests[0].answer(payload('ttft', [], { providerList: PROVIDER_LIST, archive: { rows: 3, steps: 12, shown: false } }))
+  view.requests[0].answer(payload('ttft', [], { archive: { rows: 3, steps: 12, shown: false } }))
   tree = await view.pump()
   check('пустая таблица объясняет архив, а не историю', text(tree).includes('вне текущей конфигурации'), text(tree).slice(0, 90))
   check('и называет, сколько строк там лежит', text(tree).includes('3'), text(tree).slice(0, 90))
@@ -2437,7 +2409,7 @@ for (const [label, answer] of [
   const view = mountPanel()
   let tree = await view.pump()
   view.requests[0].answer(
-    payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, archive: null, catalog: historyOnly }),
+    payload('ttft', byTtft.rows, { archive: null, catalog: historyOnly }),
   )
   tree = await view.pump()
   check('неизвестный каталог объяснён', text(tree).includes('Каталог этой установки'), text(tree).slice(0, 140))
@@ -2464,7 +2436,6 @@ for (const [label, answer] of [
   let tree = await view.pump()
   check('обе области сохранённого выбора уходят на хост', askedFor(view, 0, { sort: 'ttft', dir: 'asc', archived: true, selection: saved }), describe(view, 0))
   const answer = payload('ttft', byTtft.rows, {
-    providerList: PROVIDER_LIST,
     catalog: withRetired,
     archive: { rows: 1, steps: 12, shown: true },
   })
@@ -2481,7 +2452,7 @@ for (const [label, answer] of [
   // The answer with the archive off: it holds the same rows and says the archive
   // still holds one, so the control stays where the reader left it.
   view.requests[1].answer(
-    payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, archive: { rows: 1, steps: 12, shown: false } }),
+    payload('ttft', byTtft.rows, { archive: { rows: 1, steps: 12, shown: false } }),
   )
   tree = await view.pump()
   check('и счётчик считает только доступную область', textOf(modelsCount(tree)) === '3 из 5', textOf(modelsCount(tree)))
@@ -2672,7 +2643,6 @@ const NEVER_USED = row('ollama', 'qwen3-coder:30b', { steps: 0, lastSeen: null, 
   let tree = await view.pump()
   view.requests[0].answer(
     payload('ttft', [...byTtft.rows, NEVER_USED], {
-      providerList: PROVIDER_LIST,
       noStats: { rows: 1 },
     }),
   )
@@ -2715,7 +2685,7 @@ const NEVER_USED = row('ollama', 'qwen3-coder:30b', { steps: 0, lastSeen: null, 
   // rows it holds for models the live catalog might serve: it says nothing.
   const view = mountPanel()
   let tree = await view.pump()
-  view.requests[0].answer(payload('ttft', byTtft.rows, { providerList: PROVIDER_LIST, noStats: null }))
+  view.requests[0].answer(payload('ttft', byTtft.rows, { noStats: null }))
   tree = await view.pump()
   check('хост без каталога о таких строках молчит', !text(tree).includes('без статистики'))
   check(
@@ -2730,7 +2700,7 @@ const NEVER_USED = row('ollama', 'qwen3-coder:30b', { steps: 0, lastSeen: null, 
   const view = mountPanel()
   let tree = await view.pump()
   view.requests[0].answer(
-    payload('ttft', [NEVER_USED], { providerList: PROVIDER_LIST, noStats: { rows: 1 } }),
+    payload('ttft', [NEVER_USED], { noStats: { rows: 1 } }),
   )
   tree = await view.pump()
   check(
@@ -3103,7 +3073,7 @@ console.log('\n--- сортировка по клику на заголовок 
       // And a refused credential the host could not call a configuration fault.
       liveness: { provider: 'openrouter', model: 'down-by-host', status: 'fail', state: 'down', code: 'AUTH', error: 'Invalid API key', checkedAt: probeAt, latencyMs: 40, source: 'llm' },
     }),
-  ], { providerList: PROVIDER_LIST })
+  ], {})
   const view = mountPanel({
     entries: { [cacheKey('liveness', 'desc', 'model')]: { at: Date.now(), data: hostVerdict } },
     prefs: { sort: 'liveness', dir: 'desc' },
@@ -3131,7 +3101,7 @@ console.log('--- живость: что кружок имеет право ут�
 
 {
   const probeAt = 1_790_000_000_000
-  const withLiveness = (rows) => payload('ttft', rows, { providerList: PROVIDER_LIST })
+  const withLiveness = (rows) => payload('ttft', rows, {})
 
   const livePayload = withLiveness([
     row('openrouter', 'checked-ok', {

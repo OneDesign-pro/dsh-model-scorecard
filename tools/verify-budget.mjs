@@ -181,7 +181,12 @@ console.log(`полный проход без бюджета занял бы ~${
   check('что-то уже прочитано', first.scanned > 0, `scanned=${first.scanned}`)
 
   const payload = toPanelPayload(first, { sort: 'steps', view: 'model' })
-  check('payload несёт признак незавершённости', payload.pending > 0 && payload.complete === false)
+  // `pending > 0` is the one the panel footer reads: it is what a host that
+  // cannot finish says in the footer instead of passing a page off as the whole
+  // question. `complete` used to ride on the answer too, but it had no reader —
+  // the host that wrote it was the only one that consumed it, and `pending` is
+  // the same statement the panel can say.
+  check('payload несёт признак незавершённости', payload.pending > 0)
   check(
     'payload содержит строки',
     Array.isArray(payload.rows) && payload.rows.length > 0,
@@ -363,7 +368,7 @@ console.log(`полный проход без бюджета занял бы ~${
     listCounts.query === listingsBefore + 1,
     `list=${listCounts.query - listingsBefore}`,
   )
-  check('полная фаза дала полный ответ', payload.complete === true, `complete=${payload.complete} pending=${payload.pending}`)
+  check('полная фаза дала полный ответ', payload.pending === 0, `pending=${payload.pending}`)
   check('полный ответ считает весь корпус, включая догруженное', payload.totals?.steps === SESSIONS + 1, `steps=${payload.totals?.steps} ожидалось=${SESSIONS + 1}`)
   check('в ответе есть строки', payload.rows.length > 0, `rows=${payload.rows.length}`)
   // A full cold fold of this corpus would read 40 logs; the panel read the two it
