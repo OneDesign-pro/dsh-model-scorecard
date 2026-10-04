@@ -59,7 +59,6 @@ in `docs/`, linked from the README's *Further reading* table, not inlined.
 | `docs/panel.md` | the panel: columns, status column, selection rule, archive, saved state |
 | `docs/load-and-cache.md` | the phase chain, the snapshot, the budgets, what is stored where |
 | `docs/verification.md` | what each tool under `tools/` asserts |
-| `docs/migration.md` | the rename from `dsh-model-stats`, in full |
 
 - **`docs/*.md` are English only.** They are the same kind of artifact as the code
   and the tests, not the same kind as the README a reader opens. Doubling them
@@ -92,11 +91,13 @@ Three surfaces, one collector, so they cannot disagree:
 | Panel route `GET /api/model-scorecard` | `client.js` → `collect.js` | the user |
 | Liveness tool `model_liveness` | `lib/liveness.js` | the model |
 
-The name moved with the package on 2026-10-01 (`dsh-model-stats` →
-`dsh-model-scorecard`). The old route prefix is still mounted from the same
-handler objects for one release, the old cache directory is renamed rather than
-rebuilt, and the old `localStorage` key is read once — see *Renamed from
-`dsh-model-stats`* in `README.md` before changing any of the four.
+**One name, and nothing behind it.** The package has had exactly one name since
+2026-10-02. There is no alias for the route prefix, no move for the cache
+directory and no fallback read of an older `localStorage` key, and a change must
+not reintroduce one: a second name for the same handler is a name a reader can
+mistype, a route that can drift, and a compatibility layer whose reason expired
+long ago. The `prefs:v1` key is a different thing — the same name, an older
+*shape* — and that migration is still live.
 
 `README.md` is the authoritative metric table. A new metric is not done until
 README documents it.

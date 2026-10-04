@@ -42,33 +42,26 @@ dsh plugin --profile web add link:/path/to/dsh-model-scorecard
 Или через менеджер плагинов, направив `install_bundle` на этот каталог. У плагина
 нет рантайм-зависимостей и нет шага сборки.
 
-**Переход с `dsh-model-stats`.** Имя здесь — зависимость, и установка идёт
-через `link:`: pnpm разрешает её по ключу в `package.json` профиля и по `id:`
-строки композиции в `cordis.patch.yml`, и оба ещё содержат старое имя, пока их
-не изменят. Оставить любой из них — это не деградировавшая установка: плагина
-просто нет, и страница Plugins показывает строку, под которой ничего нет.
+Имя здесь — зависимость, потому что установка идёт через `link:`: pnpm разрешает
+пакет по ключу в `package.json` профиля и по `id:` строки композиции в
+`cordis.patch.yml`, и оба обязаны говорить `dsh-model-scorecard`, иначе плагина
+просто нет. Ключ с любым другим именем — это не деградировавшая установка: страница
+Plugins показывает строку, под которой ничего нет.
 
 ```bash
-# 1. the profile's dependency key and its bundle list
-#    ~/.dsh/profiles/web/package.json
-#      "dsh-model-stats":    "link:/path/to/dir"   ->  "dsh-model-scorecard": "link:/path/to/dir"
-#      "dsh-model-stats",                          ->  "dsh-model-scorecard",     (dsh.profile.bundles)
-# 2. the composition row — the id *is* the package name, there is no `name:` key
-#    ~/.dsh/profiles/web/cordis.patch.yml
-#      - id: model-stats                              ->  - id: model-scorecard
-# 3. reconcile node_modules and restart
+# ~/.dsh/profiles/web/package.json
+#      "dsh-model-scorecard": "link:/path/to/dir",
+#      ...                       "dsh-model-scorecard",     (dsh.profile.bundles)
+# ~/.dsh/profiles/web/cordis.patch.yml — the id *is* the package name, no `name:` key
+#      - id: model-scorecard
 cd ~/.dsh/profiles/web && pnpm install
-# restart DSH, and reload the browser tab completely — the panel's client bundle
-# is served by the host, and the new routes only reach it after both are new.
+# restart DSH, and reload the browser tab completely
 ```
 
-Путь в ссылке не обязан совпадать с новым именем: pnpm ставит `link:` под тем
-ключом, который дал профиль, и читает собственное `name` пакета из `package.json`
-(проверено — `dsh-model-scorecard 0.3.0 <- …/dsh-model-stats`). Переименовать
-каталог всё же стоит, но это отдельный шаг, а не условие установки. Больше ничем
-руками ничего делать не нужно: каталог кэша переезжает сам, сохранённое
-состояние панели читается из старого ключа, а старые маршруты продолжают
-отвечать — см. *Переименование из `dsh-model-stats`* ниже.
+Путь в ссылке не обязан совпадать с именем: pnpm ставит `link:` под тем ключом,
+который дал профиль, и читает собственное `name` пакета из `package.json`.
+Переименовать каталог под имя всё же стоит, но это отдельный шаг, а не условие
+установки.
 
 ## Где это найти
 
@@ -82,6 +75,11 @@ cd ~/.dsh/profiles/web && pnpm install
    **Подробнее** под именем объясняет строку целиком.
 2. **Инструмент `model_stats`** — те же числа обычным текстом, для агента.
 3. **Инструмент `model_liveness`** — проверка доступности, со стороны агента.
+
+Имена инструментов принадлежат DSH в целом, а не этому пакету, и у всех плагинов,
+которые их дают, они одинаковы: поэтому у *табло* и спрашивают вопрос инструментом
+под названием `model_stats`. А вот набор панели, её маршруты и её кэш несут уже
+имя пакета.
 
 `docs/panel.md` описывает панель целиком: каждый столбец, круг статуса, правило
 выбора, архив и сохранённое состояние.
@@ -363,31 +361,13 @@ GET /api/model-scorecard?sort=&dir=&view=&provider=&archived=&limit=
 В `docs/load-and-cache.md` — цепочка фаз, контракт снимка и бюджет на стороне
 браузера целиком.
 
-## Переименование из `dsh-model-stats` (2026-10-01)
-
-Плагин отвечал числами на один вопрос, а теперь отвечает на три, поэтому имя
-называет то, что содержит строка. `docs/migration.md` объясняет переименование;
-читателю нужна вот эта таблица:
-
-| | было | теперь | при обновлении |
-|---|---|---|---|
-| пакет | `dsh-model-stats` | `dsh-model-scorecard` | по нему ключуются зависимость профиля и строка композиции — см. *Установка* |
-| маршруты | `/api/model-stats…` | `/api/model-scorecard…` | четыре старых ещё отвечают один релиз, из тех же объектов-обработчиков |
-| кэш | `~/.dsh/cache/dsh-model-stats/` | `~/.dsh/cache/dsh-model-scorecard/` | перемещается через `rename` при первой активации: свёрнутый снимок и каждый сохранённый результат пробы едут с ним, и журнал активации говорит, в какую сторону это пошло |
-| переменная окружения | `DSH_MODEL_STATS_CACHE_DIR` | `DSH_MODEL_SCORE_CARD_CACHE_DIR` | старое имя всё ещё перенаправляет кэш; новое побеждает, когда заданы оба |
-| состояние панели | `dsh-model-stats:prefs:…` | `dsh-model-scorecard:prefs:…` | читается один раз из старых ключей и пишется под новым; старые ключи остаются на месте |
-
-Имена инструментов `model_stats` и `model_liveness` **не** менялись: они глобальны
-для DSH, не зависят от имени пакета, и их переименование изменило бы путь запроса
-каждой сессии, которая не просила себе миграции.
-
 ## Проверка
 
 ```bash
 node tools/verify-rating.mjs    # the formula: the anchors, the weights, the population gate, the nulls
 node tools/verify-rating-paths.mjs  # one pair, one score: cold fold, snapshot, selection and sinceMs agree; the marks match the panel's
 node tools/verify-metadata.mjs  # route metadata: bounded, cached, unknown is null, and no probe behind it
-node tools/verify-cache-dir.mjs  # the cache directory: the one-time move out of the previous name, and both variable names
+node tools/verify-cache-dir.mjs  # the cache directory: the default, the override, and that resolving it touches nothing
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last, per-column keys, direction, the status order
 node tools/verify-provider-filter.mjs  # the provider filter: one reading of it everywhere
@@ -442,7 +422,6 @@ ms) — over 28 sample(s)`, и выбирает победителя тольк�
 | [`docs/panel.md`](docs/panel.md) | панель: столбцы, круг статуса, правило выбора, архив, сохранённое состояние |
 | [`docs/load-and-cache.md`](docs/load-and-cache.md) | цепочка фаз, снимок, бюджеты, что где хранится |
 | [`docs/verification.md`](docs/verification.md) | что утверждает каждый инструмент из `tools/` и какие проверки стоили реального трафика |
-| [`docs/migration.md`](docs/migration.md) | переименование из `dsh-model-stats` целиком |
 | [`COMPARISON.md`](COMPARISON.md) | сравнение с `dsh-usage-vendor-stats` на той же реальной истории |
 
 Эти файлы намеренно только на английском: `README.md` и `README_ru.md` — это две

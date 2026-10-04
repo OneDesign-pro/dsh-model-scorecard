@@ -1264,14 +1264,6 @@ window.__ModuleLoader__.load({
     // wrote and never has to guess at an older shape.
     const PREFS_KEY = 'dsh-model-scorecard:prefs:v2.selection'
     const LEGACY_PREFS_KEY = 'dsh-model-scorecard:prefs:v1'
-    // The same two documents under the name this plugin had before 2026-10-01,
-    // read in order and never written again. The namespace moved with the
-    // package, and the preference it holds is the reader's own work — a sort, a
-    // column set, a rule about which models the table is about — so leaving it
-    // behind would open the panel on a table nobody chose. Nothing is deleted
-    // either: a reader who rolls the plugin back must find what they left, and a
-    // key this panel can still read is cheaper to keep than to explain.
-    const RENAMED_PREFS_KEYS = ['dsh-model-stats:prefs:v2.selection', 'dsh-model-stats:prefs:v1']
 
     /** One JSON document out of the store, or null. Never throws. */
     function readStoredJson(key) {
@@ -1340,41 +1332,23 @@ window.__ModuleLoader__.load({
       return migrated
     }
 
-    /** A v1 document as this panel reads it, or null when there is not one. */
+    /** The v2 document, from the current key or from memory, or null. */
     function readStoredPrefs() {
-      const stored = storageAvailable() ? readStoredJson(PREFS_KEY) : memoryPrefs
-      const document = normalizePrefs(stored)
-      if (document !== null) return document
-      if (!storageAvailable()) return null
-      // Nothing under the current name, so the rename is read once: the first
-      // document that parses under the old keys is adopted and written down
-      // under the new one, and the second is never consulted — a v1 and a v2
-      // document under the old name cannot both exist, and if they somehow did
-      // the newer shape is the one the reader was last looking at.
-      for (const key of RENAMED_PREFS_KEYS) {
-        const renamed = normalizePrefs(readStoredJson(key))
-        if (renamed === null) continue
-        storePrefs(renamed)
-        return renamed
-      }
-      return null
+      if (!storageAvailable()) return normalizePrefs(memoryPrefs)
+      return normalizePrefs(readStoredJson(PREFS_KEY))
     }
 
     /**
-     * The v1 document, from either name, or null.
+     * The v1 document, or null.
      *
-     * `readPrefs` migrates it into the current shape; it is a separate read from
-     * `readStoredPrefs` because the two migrations are different problems — one
-     * moved the namespace, the other moved the document's shape — and a v1 store
-     * under the old name would otherwise be invisible to both.
+     * A separate read from `readStoredPrefs` because the two questions are
+     * different ones: `readStoredPrefs` asks what the panel is set up as now,
+     * this one asks whether an older shape is waiting to be read up. Both keys
+     * are under the current name — the namespace was never part of the version.
      */
     function readLegacyV1() {
       if (!storageAvailable()) return null
-      for (const key of [LEGACY_PREFS_KEY, ...RENAMED_PREFS_KEYS]) {
-        const stored = readStoredJson(key)
-        if (stored !== null) return stored
-      }
-      return null
+      return readStoredJson(LEGACY_PREFS_KEY)
     }
 
     /** A stored document, whatever name it was stored under, as this panel reads it. */

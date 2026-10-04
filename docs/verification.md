@@ -8,7 +8,7 @@ them with `node`.
 node tools/verify-rating.mjs    # the formula: the anchors, the weights, the population gate, the nulls
 node tools/verify-rating-paths.mjs  # one pair, one score: cold fold, snapshot, selection and sinceMs agree; the marks match the panel's
 node tools/verify-metadata.mjs  # route metadata: bounded, cached, unknown is null, and no probe behind it
-node tools/verify-cache-dir.mjs  # the cache directory: the one-time move out of the previous name, and both variable names
+node tools/verify-cache-dir.mjs  # the cache directory: the default, the override, and that resolving it touches nothing
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last, per-column keys, direction, the status order
 node tools/verify-provider-filter.mjs  # the provider filter: one reading of it everywhere
@@ -46,7 +46,7 @@ Counts as they stand on 2026-10-03, all nineteen green (`exit=0`):
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
 | `verify-payload-consumers.mjs` | that every field of the answer has a reader, and every reader a field | 23 |
 | `verify-liveness.mjs` | the catalog join and the state classification; a live walk, so its count moves with what the stack answers | 20 |
-| `verify-cache-dir.mjs` | the one-time move of the cache directory, and both variable names | 16 |
+| `verify-cache-dir.mjs` | that the cache path resolves by its two rules and that resolving it moves nothing | 10 |
 | `verify-probe-shape.mjs` | probe shape, named pairs, the cap | 14 |
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |

@@ -38,34 +38,26 @@ dsh plugin --profile web add link:/path/to/dsh-model-scorecard
 Or through the plugin manager, pointing `install_bundle` at this directory. There
 are no runtime dependencies and no build step.
 
-**Coming from `dsh-model-stats`.** The name is a dependency, and it is a `link:`
-install: pnpm resolves it from the key in the profile's `package.json` and the
-`id:` of the composition row in `cordis.patch.yml`, and both still say the old
-name until they are changed. Leaving either one is not a degraded install — the
-plugin is simply not there, and the Plugins page shows the row with nothing under
-it.
+The name is a dependency, because the install is a `link:`: pnpm resolves the
+package from the key in the profile's `package.json` and the `id:` of the
+composition row in `cordis.patch.yml`, and both have to say `dsh-model-scorecard`
+for the plugin to be there at all. A key that says anything else is not a
+degraded install — the Plugins page shows the row with nothing under it.
 
 ```bash
-# 1. the profile's dependency key and its bundle list
-#    ~/.dsh/profiles/web/package.json
-#      "dsh-model-stats":    "link:/path/to/dir"   ->  "dsh-model-scorecard": "link:/path/to/dir"
-#      "dsh-model-stats",                          ->  "dsh-model-scorecard",     (dsh.profile.bundles)
-# 2. the composition row — the id *is* the package name, there is no `name:` key
-#    ~/.dsh/profiles/web/cordis.patch.yml
-#      - id: model-stats                              ->  - id: model-scorecard
-# 3. reconcile node_modules and restart
+# ~/.dsh/profiles/web/package.json
+#      "dsh-model-scorecard": "link:/path/to/dir",
+#      ...                       "dsh-model-scorecard",     (dsh.profile.bundles)
+# ~/.dsh/profiles/web/cordis.patch.yml — the id *is* the package name, no `name:` key
+#      - id: model-scorecard
 cd ~/.dsh/profiles/web && pnpm install
-# restart DSH, and reload the browser tab completely — the panel's client bundle
-# is served by the host, and the new routes only reach it after both are new.
+# restart DSH, and reload the browser tab completely
 ```
 
-The link path does not have to match the new name: pnpm installs a `link:` under
+The link path does not have to match the name: pnpm installs a `link:` under
 whatever key the profile gives it and reads the package's own `name` from
-`package.json` (verified — `dsh-model-scorecard 0.3.0 <- …/dsh-model-stats`).
-Renaming the directory is still worth doing, but it is a separate step and not a
-condition of the install. Nothing else is a manual step: the cache directory
-moves itself, the panel's saved state is read from the old key, and the old routes
-keep answering — see *Renamed from `dsh-model-stats`* below.
+`package.json`. Renaming the directory to match is still worth doing, but it is
+a separate step and not a condition of the install.
 
 ## Where to find it
 
@@ -79,6 +71,11 @@ Three surfaces, one collector, so they can never disagree:
    that row in full.
 2. **The `model_stats` tool** — the same numbers as plain text, for the agent.
 3. **The `model_liveness` tool** — the availability check, from the agent's side.
+
+The two tool names are global to DSH, not to this package, and are the same on
+every plugin that provides them: that is why a tool called `model_stats` is how
+you ask a *scorecard* a question. The panel's own bundle, its routes and its
+cache all carry the package name instead.
 
 `docs/panel.md` describes the panel in full: every column, the status circle, the
 selection rule, the archive and the saved state.
@@ -353,31 +350,13 @@ with no snapshot.
 `docs/load-and-cache.md` has the phase chain, the snapshot contract and the
 browser-side budget in full.
 
-## Renamed from `dsh-model-stats` (2026-10-01)
-
-The plugin answered one question with numbers and now answers three, so the name
-names what a row holds. `docs/migration.md` explains the rename; what a reader
-needs is the table:
-
-| | before | now | on upgrade |
-|---|---|---|---|
-| package | `dsh-model-stats` | `dsh-model-scorecard` | the profile dependency and the composition row are keyed by it — see *Install* |
-| routes | `/api/model-stats…` | `/api/model-scorecard…` | the old four still answer for one release, from the same handler objects |
-| cache | `~/.dsh/cache/dsh-model-stats/` | `~/.dsh/cache/dsh-model-scorecard/` | moved by a `rename` on first activation: the folded snapshot and every stored probe result come with it, and the activation log says which way it went |
-| env var | `DSH_MODEL_STATS_CACHE_DIR` | `DSH_MODEL_SCORE_CARD_CACHE_DIR` | the old name still redirects the cache; the new one wins when both are set |
-| panel state | `dsh-model-stats:prefs:…` | `dsh-model-scorecard:prefs:…` | read once from the old keys and written under the new one; the old keys are left where they are |
-
-The tool names `model_stats` and `model_liveness` did **not** change: they are
-global to DSH, independent of the package name, and renaming them would change
-the request path of every session that never asked to be migrated.
-
 ## Verification
 
 ```bash
 node tools/verify-rating.mjs    # the formula: the anchors, the weights, the population gate, the nulls
 node tools/verify-rating-paths.mjs  # one pair, one score: cold fold, snapshot, selection and sinceMs agree; the marks match the panel's
 node tools/verify-metadata.mjs  # route metadata: bounded, cached, unknown is null, and no probe behind it
-node tools/verify-cache-dir.mjs  # the cache directory: the one-time move out of the previous name, and both variable names
+node tools/verify-cache-dir.mjs  # the cache directory: the default, the override, and that resolving it touches nothing
 node tools/verify-budget.mjs     # collection contract: bounds, one read per session, snapshot reuse
 node tools/verify-sort-order.mjs # row order: median basis, error tie-break, missing metrics last, per-column keys, direction, the status order
 node tools/verify-provider-filter.mjs  # the provider filter: one reading of it everywhere
@@ -432,7 +411,6 @@ line's own figure.
 | [`docs/panel.md`](docs/panel.md) | the panel: columns, the status circle, the selection rule, the archive, saved state |
 | [`docs/load-and-cache.md`](docs/load-and-cache.md) | the phase chain, the snapshot, the budgets, what is stored where |
 | [`docs/verification.md`](docs/verification.md) | what each tool under `tools/` asserts, and the checks that took real traffic |
-| [`docs/migration.md`](docs/migration.md) | the rename from `dsh-model-stats`, in full |
 | [`COMPARISON.md`](COMPARISON.md) | against `dsh-usage-vendor-stats`, on the same real history |
 
 These files are English-only by design: `README.md` and `README_ru.md` are the

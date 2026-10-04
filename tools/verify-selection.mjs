@@ -817,21 +817,16 @@ plugin.apply({
 
 check('зарегистрированы оба маршрута', routes.has('/api/model-scorecard') && routes.has('/api/model-scorecard/query'), [...routes.keys()].join(' | '))
 
-// The deprecated namespace is mounted from the same handler objects, not from
-// copies: a copied handler is a second implementation of the same route, and the
-// one thing it must not do is answer a different question than the live path. So
-// the assertion is identity, not presence — and then the answer itself, because
-// identity plus a body that happens to match would still pass a route that
-// ignores the request.
-const legacyRoute = '/api/model-stats/query'
-check('старый префикс /api/model-stats/query смонтирован', routes.has(legacyRoute), [...routes.keys()].join(' | '))
-const legacyHandler = routes.get(legacyRoute)?.handler
-const liveHandler = routes.get('/api/model-scorecard/query')?.handler
+// Exactly four routes, under exactly one prefix. The package used to mount a
+// second prefix from the same handler objects for one release; a route table
+// with anything extra in it is a second name a reader can ask for and forget,
+// so the count is the assertion rather than a side effect of it.
 check(
-  'старый и новый путь — один и тот же обработчик',
-  legacyHandler !== undefined && legacyHandler === liveHandler,
-  legacyHandler === liveHandler ? 'один объект обработчика на оба пути' : 'обработчики разошлись',
+  'смонтированы ровно четыре маршрута под одним префиксом',
+  routes.size === 4 && [...routes.keys()].every((path) => path.startsWith('/api/model-scorecard')),
+  [...routes.keys()].join(' | '),
 )
+check('и все четыре — разные пути', new Set(routes.keys()).size === routes.size)
 
 async function call(path, { method = 'GET', body = null, rawBody = undefined } = {}) {
   const route = routes.get(path.split("?")[0])

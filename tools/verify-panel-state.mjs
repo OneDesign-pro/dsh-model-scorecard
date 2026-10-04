@@ -638,7 +638,7 @@ const bySpeed = payload(
  * a case one millisecond from the threshold is a coin toss. Only the panel's clock
  * is frozen; the tool's own fixtures stay on the real one.
  */
-function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPrefs = null, renamedPrefs = null, brokenStorage = false, instantDeadline = false, search = '', locale = null, clock = null } = {}) {
+function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPrefs = null, brokenStorage = false, instantDeadline = false, search = '', locale = null, clock = null } = {}) {
   const store = new Map()
   if (entries !== null) store.set('dsh-model-scorecard:v3', JSON.stringify({ entries }))
   // The store the previous build wrote, for the one case that asks what the panel
@@ -654,13 +654,8 @@ function mountPanel({ entries = null, legacyStore = null, prefs = null, legacyPr
   // that found a v2 document would never look at the old key, and a case that
   // seeded both would be testing the wrong branch.
   if (legacyPrefs !== null) store.set('dsh-model-scorecard:prefs:v1', JSON.stringify(legacyPrefs))
-  // The same document under the name the package had before 2026-10-01, for the
-  // one case that asks whether the reader's own sort, column set and selection
-  // survive the namespace moving. Seeded alone: a panel that found the current
-  // key would never read this one, and a case with both would test nothing.
-  if (renamedPrefs !== null) store.set('dsh-model-stats:prefs:v2.selection', JSON.stringify({ version: 2, columnsAll: true, ...renamedPrefs }))
   // Never both a legacy key and the current one: a panel that finds a document
-  // under the current key never looks at the others, and a case seeding both
+  // under the current key never looks at the other, and a case seeding both
   // would be testing a branch no reader can reach.
   else if (legacyPrefs === null) store.set('dsh-model-scorecard:prefs:v2.selection', JSON.stringify({ version: 2, columnsAll: true, ...prefs }))
   // A browser that refuses to store anything is a real case on a locked-down
@@ -1823,23 +1818,6 @@ console.log('\n--- выбор моделей: дерево ---')
     askedFor(view, 0, { sort: 'ttft', dir: 'asc', selection: DEFAULT_SELECTION }),
     describe(view, 0),
   )
-}
-{
-  // The package rename moved the `localStorage` key with it. The document under
-  // the old key is the reader's own work — a sort, a column set, a rule about
-  // which models the table is about — so it is adopted once and written down
-  // under the new key, and the old key is left where it is: a reader who rolls
-  // the plugin back must find what they left.
-  const view = mountPanel({ renamedPrefs: { sort: 'speed', view: 'provider', selection: rules({ providers: { codex: 'none' } }) } })
-  view.render()
-  check(
-    'состояние панели из старого пространства имён применено',
-    askedFor(view, 0, { sort: 'speed', dir: 'desc', view: 'provider', selection: rules({ providers: { codex: 'none' } }) }),
-    describe(view, 0),
-  )
-  const adopted = JSON.parse(view.store.get('dsh-model-scorecard:prefs:v2.selection'))
-  check('и переписано под текущим ключом', adopted.sort === 'speed' && adopted.view === 'provider', JSON.stringify(adopted.selection))
-  check('старый ключ остался на месте', view.store.get('dsh-model-stats:prefs:v2.selection') !== null)
 }
 {
   // A corrupt rule document is not a question: only a document this panel can read
