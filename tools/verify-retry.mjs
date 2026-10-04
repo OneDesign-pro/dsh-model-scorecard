@@ -46,6 +46,17 @@ if (!existsSync(CORPUS)) {
 }
 
 const files = readdirSync(CORPUS).filter((name) => name.endsWith('.jsonl'))
+if (files.length === 0) {
+  // An empty directory passes every assertion below without asserting anything:
+  // the fold produces no samples, the checks compare empty lists, and the tool
+  // prints OK. That is the failure `verify-official` already refuses — an
+  // unverifiable run must not read as a pass — and it is not hypothetical: the
+  // corpus at the default path had been emptied by /tmp between two runs, and
+  // this tool stayed green for as long as nobody counted its output rows.
+  console.error(`no session logs at ${CORPUS} (${files.length} .jsonl file(s))`)
+  console.error('an empty corpus asserts nothing; extract the logs first')
+  process.exit(1)
+}
 const samples = []
 const errors = []
 const retries = []
