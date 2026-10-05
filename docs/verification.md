@@ -32,17 +32,19 @@ node/tools/verify-readme-parity.mjs  # README.md and README_ru.md are still one 
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-04, all twenty-one green (`exit=0`):
+Counts as they stand on 2026-10-05, twenty green (`exit=0`) over the 347-log corpus.
+The twenty-first is `verify-liveness.mjs`, which needs real provider keys and was not
+walked today:
 
 | tool | what it counts | checks |
 |---|---|---|
 | `verify-panel-state.mjs` | panel behaviour, driven through the shipped `client.js`: the answer's page, the cache budget, a group that spans both scopes | 376 |
-| `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and the deprecated route alias | 124 |
+| `verify-selection.mjs` | rules, catalog, an independent recomputation of the aggregate, and that exactly four routes are mounted under the one prefix | 124 |
 | `verify-sort-order.mjs` | every order is total, stable and discriminating, and the two tool orders are exact opposites | 92 |
 | `verify-provider-filter.mjs` | one reading of the filter on every surface | 62 |
 | `verify-rating.mjs` | the formula's arithmetic, exclusions, weighting, nulls | 60 |
 | `verify-metadata.mjs` | bounded lookups, TTL, dedup, disposal, the whitelist | 60 |
-| `verify-budget.mjs` | the collection contract, and the panel's phase chain | 54 |
+| `verify-budget.mjs` | the collection contract, and the panel's phase chain | 55 |
 | `verify-rating-paths.mjs` | the same pair scored identically down every path | 41 |
 | `verify-winner-floor.mjs` | that every winner line is picked on one shared floor and prints what it decided over | 32 |
 | `verify-configured-rows.mjs` | what a pair with no history is | 31 |
@@ -53,23 +55,46 @@ Counts as they stand on 2026-10-04, all twenty-one green (`exit=0`):
 | `verify-probe-budget.mjs` | the deadline rule, and the body the fallback posts | 14 |
 | `verify-tree.mjs` | what the package ships: imports, orphans, leftovers, empty files | 7 |
 
-That is 1 026 counted assertions in the sixteen tools that print a count, and 20 of
-them are the live walk of `verify-liveness.mjs` — it prints one check per probed pair
-until one answers and three more once one does, so that row reads 20, 21 or 22
-depending on the run (20 on 2026-10-04, which is why the number here is dated). The
-other five assert by exhaustive comparison instead — `verify-official.mjs` field by
+That is **1 021** counted assertions — the sum of the column above — in the sixteen
+tools that print a count. The number is quoted because the paragraph before it said
+1 026 over a column that adds to 1 020, and a document that cannot add up its own
+table is not a source. Re-counting the column against a run today reproduces thirteen
+of its sixteen rows exactly; two do not: `verify-panel-state.mjs` printed 373 `OK`
+lines where the row says 376, and `verify-rating.mjs` prints a table of rating cases
+rather than a line per assertion, so the 60 beside its name has no visible source in
+its own output. The `verify-liveness.mjs` row is its 2026-10-04 value and one of the
+20: it needs real provider keys and was not walked on 2026-10-05, and its count is the
+one row in the table that is not a property of the code — it prints one check per
+probed pair until one answers and three more once one does, so it reads 20, 21 or 22
+depending on what the stack says. What would make the
+column trustworthy is for each verifier to print its own total rather than have the
+number read off its output by hand — recorded, not done.
+The other five assert by exhaustive comparison instead — `verify-official.mjs` field by
 field against the official projection, `verify-retry.mjs` over every retry event
-in the corpus, `verify-tokens-per-fragment.mjs` over 21 715 folded steps of
-20 models, `verify-tool-timing.mjs` over every paired tool call in the corpus, and
-`verify-turn-ends.mjs` over every `turn/end` event in it.
+in the corpus, `verify-tokens-per-fragment.mjs` over every step it can fold out of
+**this machine's live store** (27 320 steps, 26 models with at least ten rate samples
+on 2026-10-05 — a number that moves between two runs minutes apart, because the
+store is being written while the tool reads it), `verify-tool-timing.mjs` over every
+paired tool call in the corpus, and `verify-turn-ends.mjs` over every `turn/end`
+event in it.
 
 `verify-tool-timing.mjs` also folds three synthetic event streams, because the
 shapes they stand for cannot exist in any corpus: a `tool/call` with no step, a
 log with no steps at all, and the flat `toolCallId` spelling of a call id. Each
 guard was checked by removing it and watching the tool go red — without the step
 key's validation one step inherits 500 ms of another step's tool time, which is
-the only shape this plugin considers worse than publishing nothing. The three corpus tools
-take their path as their first argument, defaulting to `/tmp/dshcorpus` (347
+the only shape this plugin considers worse than publishing nothing. The same tool
+also classifies every result that pairs with no open call, because a bare count
+would let a wrong explanation stand: all 454 of them on this history are
+`compaction/prune` re-commits of a call that was already timed — same turn, same
+step, hours later (median gap 12 953 767 ms) and with a shorter body. It asserts
+that each session's prune events match its re-commits one for one, that no result
+names a call the log never recorded, that none answers a call that has not arrived
+yet, and that no re-commit carries an error the first answer already booked. Those
+four are what keep the pairing comment in `lib/fold.js` a claim rather than a
+story: a host that starts dropping real durations fails here instead of
+shortening a published median. The three corpus tools take their path as their
+first argument, defaulting to `/tmp/dshcorpus` (347
 sessions here) — a missing corpus is an inability to run, never a pass, and so is
 an empty one: the directory at that default path had been emptied between two
 runs and `verify-retry.mjs` stayed green over nothing until this was checked.

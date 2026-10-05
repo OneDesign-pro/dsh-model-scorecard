@@ -26,6 +26,10 @@
 //      figure.
 //   6. A log that stops naming steps, or that drops one spelling of the call
 //      id, degrades to *unmeasured* rather than to a zero.
+//   7. A result that pairs with no open call is explained by `compaction/prune`,
+//      session by session, and is never a call the log forgot to commit — which is
+//      the claim the pairing comment in `lib/fold.js` makes, and the only thing
+//      that keeps it from rotting into a plausible sentence about dropped work.
 //
 // A directory of session logs, one JSON event per line, is the input — the
 // same corpus `tools/verify-retry.mjs` reads.
@@ -62,6 +66,16 @@ const retries = []
 let callsInLog = 0
 let resultsInLog = 0
 let resultsWithoutCall = 0
+// The three ways a result can pair with no open call, counted apart because they
+// mean opposite things: a re-commit is a figure that is *right* (the call was
+// already timed), an out-of-order answer or a call the log never recorded is a
+// duration that was silently dropped.
+let reCommitResults = 0
+let outOfOrderResults = 0
+let orphanResults = 0
+let errorsOnReCommits = 0
+let pruneEvents = 0
+const pruneMismatches = []
 let pairs = 0
 let pairsBeforeMessage = 0
 let negativeInLog = 0
@@ -81,8 +95,21 @@ for (const name of files) {
     }
   }
 
+  // Every call this log holds, at any position: the walk below is single-pass and
+  // in order, so without this set an answer that arrived before its call would be
+  // counted as a call that was never made — the two have opposite consequences.
+  const recordedCalls = new Set()
+  for (const event of events) {
+    if (event?.type === 'tool/call' && typeof event.data?.callId === 'string') {
+      recordedCalls.add(event.data.callId)
+    }
+  }
+
   const open = new Map() // callId -> { time, turn, step }
   const messageAt = new Map() // "turn:step" -> assistant/message time
+  const answered = new Set() // callIds this walk has already paired
+  let filePrunes = 0
+  let fileReCommits = 0
   for (const event of events) {
     if (event === null || typeof event !== 'object') continue
     const data = event.data
@@ -99,6 +126,11 @@ for (const name of files) {
       messageAt.set(`${data.turn}:${data.step}`, event.time)
       continue
     }
+    if (event.type === 'compaction/prune') {
+      pruneEvents += 1
+      filePrunes += 1
+      continue
+    }
     if (event.type !== 'tool/result') continue
 
     resultsInLog += 1
@@ -106,9 +138,23 @@ for (const name of files) {
     const call = typeof callId === 'string' ? open.get(callId) : undefined
     if (call === undefined) {
       resultsWithoutCall += 1
+      if (typeof callId === 'string' && answered.has(callId)) {
+        reCommitResults += 1
+        fileReCommits += 1
+        // The fold counts a failed tool from the *result*, not from the pair, so a
+        // re-commit that carried an error would book one failure twice in `err`.
+        // None does on this history, which is the difference between a caveat and a
+        // defect — and the only way it stays a caveat is by being asserted.
+        if (data.error !== null && data.error !== undefined) errorsOnReCommits += 1
+      } else if (typeof callId === 'string' && recordedCalls.has(callId)) {
+        outOfOrderResults += 1
+      } else {
+        orphanResults += 1
+      }
       continue
     }
     open.delete(callId)
+    answered.add(callId)
     pairs += 1
     if (event.time - call.time < 0) negativeInLog += 1
     const closed = messageAt.get(`${call.turn}:${call.step}`)
@@ -119,6 +165,12 @@ for (const name of files) {
     else callsOnUnansweredStep += 1
   }
 
+  // Session by session and not only in total: a surplus of prunes in one log
+  // hidden by a surplus of repeats in another would leave the claim untested.
+  if (filePrunes !== fileReCommits) {
+    pruneMismatches.push({ name, filePrunes, fileReCommits })
+  }
+
   const folded = foldSession(events, { sessionId })
   for (const sample of folded.samples) samples.push(sample)
   for (const error of folded.errors) errors.push(error)
@@ -127,6 +179,33 @@ for (const name of files) {
 
 const report = aggregate(samples, { sort: 'toolTime', errors, retries })
 const failures = []
+
+// 7. Every result that pairs with no open call is a re-commit, and the prune events
+//    of the same session account for it one for one. Without this the pairing
+//    comment in `lib/fold.js` is a story about 454 results; with it, a host that
+//    begins answering calls it never recorded — or a prune that stops rewriting a
+//    result the fold already timed — fails here instead of shortening a published
+//    median quietly, which is the failure mode this whole tool exists for.
+if (orphanResults !== 0) {
+  failures.push(
+    `${orphanResults} result(s) answer a call the log never recorded: those durations are gone, not re-counted`,
+  )
+}
+if (outOfOrderResults !== 0) {
+  failures.push(
+    `${outOfOrderResults} result(s) arrive before the call they answer: the fold cannot pair them`,
+  )
+}
+if (errorsOnReCommits !== 0) {
+  failures.push(
+    `${errorsOnReCommits} re-commit(s) carry an error the first answer already booked: one failure counted twice in the err column`,
+  )
+}
+for (const mismatch of pruneMismatches) {
+  failures.push(
+    `${mismatch.name}: ${mismatch.filePrunes} compaction/prune event(s) against ${mismatch.fileReCommits} re-committed result(s) — pruning is no longer the explanation`,
+  )
+}
 
 // 3. A span is a number and a name, or it is a defect.
 let spans = 0
@@ -312,7 +391,13 @@ if (control.samples[0]?.toolSpans?.[0]?.ms !== 300 || control.samples[0].toolSte
 
 console.log(`corpus: ${files.length} log(s), ${samples.length} step sample(s)`)
 console.log(`tool/call ${callsInLog}, tool/result ${resultsInLog}, paired by callId ${pairs}`)
-console.log(`results with no recorded call ${resultsWithoutCall} (counted, never timed)`)
+console.log(
+  `results with no open call ${resultsWithoutCall} — re-committed after compaction ${reCommitResults} (their call was already timed), ` +
+    `answered before the call ${outOfOrderResults}, naming a call never recorded ${orphanResults}`,
+)
+console.log(
+  `compaction/prune events ${pruneEvents}, sessions where they do not match the re-commits ${pruneMismatches.length}, re-commits carrying an error ${errorsOnReCommits}`,
+)
 console.log(`negative durations in the log ${negativeInLog}`)
 console.log(`pairs on a step that answered ${pairsOnAnsweredStep}, on one that did not ${callsOnUnansweredStep}`)
 console.log(`pairs landing before their step's assistant/message ${pairsBeforeMessage}`)

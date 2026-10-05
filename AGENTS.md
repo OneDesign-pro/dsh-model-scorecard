@@ -135,13 +135,24 @@ ignore it — write one entry to `Plans/TECH-DEBT.md` and carry on.**
 Format, newest first:
 
 ```
-## D-NNN · `path:line` — one-line title
+## D-NNN · `path` — one-line title
 
 **What.** the defect, precisely enough that someone else can confirm it
 **Why it is still here.** the cost of fixing it now
 **Cost of leaving it.** what it costs while it stays — `-` if none
 **To close it.** the concrete change that closes it
 ```
+
+**Name the file and the symbol, never a line number.** Three of the entries open
+today cited one, and all three pointed elsewhere: `lib/fold.js:198` is
+`newRetryState()` and not the `assistant/attempt` branch its entry is about, and
+`lib/fold.js:954` is the opening of `aggregate`'s doc comment and not the
+`retryFailedSteps: byModels.reduce(...)` line the entry names. The record written
+to fix that went stale in its own making — it put `retryFailedSteps` at `:999`,
+where the same symbol is now at `:1243`, seven lines away from where it stood when
+this rule was written and moved there by one comment edit above it. A symbol
+survives the next commit, and the entry already names it in its body: that name is
+what the number was standing in for.
 
 Rules for deciding:
 
