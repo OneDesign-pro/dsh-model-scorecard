@@ -371,6 +371,18 @@ console.log(`полный проход без бюджета занял бы ~${
   check('полная фаза дала полный ответ', payload.pending === 0, `pending=${payload.pending}`)
   check('полный ответ считает весь корпус, включая догруженное', payload.totals?.steps === SESSIONS + 1, `steps=${payload.totals?.steps} ожидалось=${SESSIONS + 1}`)
   check('в ответе есть строки', payload.rows.length > 0, `rows=${payload.rows.length}`)
+  // The footer opens with `footer.scanned` — "sessions in report" — and on the
+  // follow-up pass the collector answered it with the ids the pass had been *asked*
+  // for. This fixture reads two logs and returns the steps of forty-one sessions, so
+  // the panel printed "sessions in report: 2" under a whole corpus, which is the
+  // panel's ordinary path on a warm host. `readNow` is the field that says what a
+  // pass did; `scanned` says what the reader is looking at, and the two disagree by
+  // design on this branch.
+  check(
+    'догруженный ответ считает сессии в отчёте, а не прочитанные в этом проходе',
+    payload.scanned === SESSIONS + 1,
+    `scanned=${payload.scanned} ожидалось=${SESSIONS + 1} readNow=${payload.readNow}`,
+  )
   // A full cold fold of this corpus would read 40 logs; the panel read the two it
   // was missing. The budget is what makes the other case safe, and the wall clock
   // is here to catch a regression that spends the whole corpus again.

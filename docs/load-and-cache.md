@@ -33,6 +33,32 @@ never held behind a cold fold:
    snapshot entry may be reused, so a repeat pass reads nothing at all, and a
    changed log is the only log read.
 
+## What the progress fields count
+
+Phase 3 is the phase that can misreport itself. It is asked for the handful of
+sessions phase 2 could not vouch for, reads those, and then re-gathers **every
+listed session** from the cache — because the caller is replacing an answer
+computed from exactly that cache. So one pass has two honest sizes, and the panel
+footer's first part prints only one of them:
+
+- **`scanned`** — the sessions whose fold is in *this answer*, which on the
+  follow-up pass is the whole listing it could gather and not the ids it was asked
+  for. Measured on the phase-chain fixture as 41 sessions in the answer against a
+  2-log read, and on this machine's store as **548 of 552** with `readNow=1`: a
+  footer printing the ask there says "sessions in report: 1" under a table folded
+  from nearly five hundred, which is what it did before the recount.
+- **`readNow`** — what the pass took off disk. This is the field that says how
+  expensive the request was, and it is the one the client uses to decide whether
+  work is still moving.
+- **`skipped`** — sessions the pass tried and could not fold, and **`pending`** —
+  the ones a deadline left for the next pass. On the run above the three account
+  for the listing exactly: 548 folded + 4 unreadable logs = 552.
+
+`tools/verify-budget.mjs` asserts the first of these on the follow-up path. The
+label is the contract: a footer that says "sessions in report" and counts the ask
+is invisible in every other figure on the screen, so nothing but that check ties
+the two together.
+
 ## What counts as "changed"
 
 One log's own file identity — `dev:ino:size:mtime:ctime` — and nothing else.

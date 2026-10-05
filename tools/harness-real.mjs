@@ -152,7 +152,8 @@ const panel = await timed('fresh process: panelPayload() (the phase chain)', () 
 console.log(
   `  ok=${panel.value.ok} rows=${panel.value.rows?.length ?? 0} ` +
     `steps=${panel.value.totals?.steps ?? '-'} pending=${panel.value.pending} ` +
-    `scanned=${panel.value.scanned} snapshotAt=${panel.value.snapshotAt ?? '-'}\n`,
+    `scanned=${panel.value.scanned} skipped=${panel.value.skipped} ` +
+    `readNow=${panel.value.readNow} snapshotAt=${panel.value.snapshotAt ?? '-'}\n`,
 )
 
 await rm(cacheDir, { recursive: true, force: true })
