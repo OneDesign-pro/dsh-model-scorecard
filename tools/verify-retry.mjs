@@ -5,7 +5,7 @@
 // This is the only tool that runs over the real history rather than a fixture,
 // so it is where the claims README makes about a *corpus* are checked — the
 // ones a synthetic fixture cannot prove because the fixture is what makes them
-// true. Seven things are asserted, then the table is printed:
+// true. Eight things are asserted, then the table is printed:
 //
 //   1. The dead-time identity never produces a negative `ttftCleanMs`. If the
 //      definition of dead time were wrong — a bad timestamp, a retry that
@@ -25,6 +25,12 @@
 //      reaching past the message that closed it.
 //   7. Every tool error is attributed. This is the item-1 bug: they all used to
 //      reach `aggregate` labelled `unknown/unknown` and be dropped.
+//   8. The two report-level retry totals are exactly the model rows' sums, and
+//      the provider rows exceed them by exactly the events that named no model.
+//      That difference is what the `Known` in `retriesKnown` and
+//      `retryFailedStepsKnown` admits to; a future pass that made the names
+//      whole by totalling them over the providers would fail here instead of
+//      publishing a count that no row beside it supports (D-022).
 //
 // A file of session logs, one JSON event per line, is the input. The default is
 // the same directory the analysis scripts use.
@@ -150,6 +156,32 @@ if (unattributed.length > givenUpRetries / 2) {
   )
 }
 
+// 8: the totals are the model reading, and they say so in their names. The
+// provider rows beside them count the events that named no model as well, so
+// the two readings differ by exactly those events — which is the one number a
+// reader of `retriesKnown` has to be able to find.
+const unattributedEvents = retries
+  .filter((failure) => failure.model === null)
+  .reduce((sum, failure) => sum + failure.retryCount, 0)
+const knownGaveUp = retries.filter((failure) => failure.model !== null).length
+if (report.retriesKnown !== countedByModel) {
+  failures.push(
+    `totals.retriesKnown is ${report.retriesKnown}, the model rows sum to ${countedByModel}`,
+  )
+}
+if (report.retryFailedStepsKnown !== knownGaveUp) {
+  failures.push(
+    `totals.retryFailedStepsKnown is ${report.retryFailedStepsKnown}, ` +
+      `${knownGaveUp} gave-up step(s) named a model`,
+  )
+}
+if (countedByProvider - countedByModel !== unattributedEvents) {
+  failures.push(
+    `provider rows exceed model rows by ${countedByProvider - countedByModel}, ` +
+      `but ${unattributedEvents} retry event(s) named no model`,
+  )
+}
+
 // 5 + 6: the derived step identities, on the real history.
 const Q = SPEED_QUALIFICATION
 let negativeOverhead = 0
@@ -234,6 +266,8 @@ console.log('  recovered   :', foldedRetries, `on ${samples.filter((s) => (s.ret
 console.log('  gave up     :', givenUpRetries, `on ${retries.length} step(s)`)
 console.log('  unattributed:', unattributed.length, 'exhausted step(s) had no model to name')
 console.log('  by provider :', countedByProvider, 'by model:', countedByModel)
+console.log('  known totals:', report.retriesKnown, 'retries /', report.retryFailedStepsKnown,
+  `gave up (${unattributedEvents} event(s) and ${unattributed.length} gave-up step(s) named no model)`)
 console.log('')
 console.log('derived       :', overheadSamples, 'overhead sample(s),',
   report.byModel.reduce((sum, row) => sum + row.e2eTps.count, 0), 'end-to-end rate sample(s)')

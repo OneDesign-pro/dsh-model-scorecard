@@ -385,7 +385,7 @@ node tools/verify-probe-budget.mjs  # the probe's deadline: the route's own decl
 node tools/verify-probe-shape.mjs   # the probe's shape and scope: through ctx.llm, and the pairs a reader named
 node tools/harness-real.mjs      # the same collector driven against this machine's real store
 node tools/verify-official.mjs   # field-by-field cross-check against sessionStats
-node tools/verify-retry.mjs      # dead time is never negative, over every retry event in the corpus
+node tools/verify-retry.mjs      # the retry identities and the model-known totals, over every retry event in the corpus
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model
 node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragments
 node tools/verify-tree.mjs   # what the package ships: a reachable lib/, an import that resolves, no leftover

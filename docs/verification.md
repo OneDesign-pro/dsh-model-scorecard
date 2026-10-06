@@ -20,7 +20,7 @@ node tools/verify-probe-budget.mjs  # the probe's deadline: the route's own decl
 node tools/verify-probe-shape.mjs   # the probe's shape and scope: through ctx.llm, and the pairs a reader named
 node tools/harness-real.mjs      # the same collector driven against this machine's real store
 node tools/verify-official.mjs   # field-by-field cross-check against sessionStats
-node tools/verify-retry.mjs      # dead time is never negative, over every retry event in the corpus
+node tools/verify-retry.mjs      # the retry identities and the model-known totals, over every retry event in the corpus
 node tools/per-model-speed.mjs   # decode vs streaming-span throughput per model
 node tools/verify-tokens-per-fragment.mjs  # tok/s is tokens, not stream fragments
 node tools/verify-tree.mjs   # what the package ships: a reachable lib/, an import that resolves, no leftover
@@ -28,15 +28,16 @@ node tools/verify-payload-consumers.mjs  # every field of the answer has a reade
 node tools/verify-winner-floor.mjs  # every winner line is picked on one shared floor and says what it decided over
 node tools/verify-tool-timing.mjs  # tool duration: every answered call counted once, and outside the step's LLM span
 node tools/verify-turn-ends.mjs  # turn outcomes: one record per turn that reached a model, and the kinds add up
-node/tools/verify-readme-parity.mjs  # README.md and README_ru.md are still one document
+node tools/make-corpus.mjs       # rebuild the corpus the three corpus tools read
+node tools/verify-readme-parity.mjs  # README.md and README_ru.md are still one document
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-06, twenty green (`exit=0`) over the 553-log corpus.
-The twenty-first is `verify-liveness.mjs`, which needs real provider keys and was not
-walked today. The column is dated prose rather than a measurement: nothing in those
-tools prints its own total, so two of the rows below are numbers nobody can
-re-derive (`Plans/TECH-DEBT.md`, D-049).
+Counts as they stand on 2026-10-06: twenty-one green (`exit=0`) over the 553-log
+corpus, and `verify-liveness.mjs` was not walked because it needs real provider keys.
+The column is dated prose rather than a measurement: nothing in those tools prints its
+own total, so two of the rows below are numbers nobody can re-derive
+(`Plans/TECH-DEBT.md`, D-049).
 
 | tool | what it counts | checks |
 |---|---|---|
@@ -105,9 +106,17 @@ their first argument, defaulting to `/tmp/dshcorpus` (553
 sessions here) — a missing corpus is an inability to run, never a pass, and so is
 an empty one: the directory at that default path had been emptied between two
 runs and `verify-retry.mjs` stayed green over nothing until this was checked. It
-was emptied again on 2026-10-06 by a reboot, and rebuilding it from
-`~/.dsh/sessions` (`zstd -dc` per session, highest log version) is what those
-counts above were taken from.
+was emptied again on 2026-10-06 by a reboot, and those counts were taken after
+rebuilding it from `~/.dsh/sessions` with `node tools/make-corpus.mjs`, which is
+that rebuild as one command. Its rule: one log per session directory, the newest
+generation in it — `session.jsonl.zstd` or the highest `session.vN.jsonl.zstd`,
+because 127 of this store's 563 session directories have only the unversioned
+spelling, and a rebuild that matched `session.v*` alone would skip 141 of its 587
+logs. It writes `<workspace-slug>__<session-dir>.jsonl`, since the tools read the
+file name back as the session id and a bare session directory collides across
+projects. It refuses an empty store, refuses to `--clean` a path it cannot vouch
+for, and prints the count and the generation histogram it chose, so the number is
+the tool's own and not one read off `ls` afterwards.
 
 ## The panel test
 

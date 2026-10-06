@@ -147,7 +147,7 @@ Format, newest first:
 today cited one, and all three pointed elsewhere: `lib/fold.js:198` is
 `newRetryState()` and not the `assistant/attempt` branch its entry is about, and
 `lib/fold.js:954` is the opening of `aggregate`'s doc comment and not the
-`retryFailedSteps: byModels.reduce(...)` line the entry names. The record written
+`retryFailedStepsKnown: byModels.reduce(...)` line the entry names. The record written
 to fix that went stale in its own making — it put `retryFailedSteps` at `:999`,
 where the same symbol is now at `:1243`, seven lines away from where it stood when
 this rule was written and moved there by one comment edit above it. A symbol
@@ -201,7 +201,7 @@ node tools/verify-sort-order.mjs      # every order is total and stable
 node tools/verify-panel-state.mjs     # every heading's sort key is host-accepted
 node tools/verify-budget.mjs          # a bounded pass is still bounded
 node tools/verify-provider-filter.mjs # a filter reaches the summary lines
-node tools/verify-retry.mjs           # retry identity never goes negative
+node tools/verify-retry.mjs           # the retry identities and the model-known totals
 node tools/verify-tool-timing.mjs    # every answered tool call counted once, outside the step's LLM span
 node tools/verify-turn-ends.mjs      # one turn record per turn that reached a model
 node tools/verify-configured-rows.mjs # a pair with no history is a row, and is ordered as one
@@ -212,7 +212,10 @@ The three corpus tools (`verify-retry`, `verify-tool-timing`, `verify-turn-ends`
 read `/tmp/dshcorpus` unless told otherwise. **A missing corpus and an empty one
 are both an inability to run, never a pass** — the directory at that path has
 been emptied between runs before, and a fold over nothing satisfies every
-assertion it has.
+assertion it has. Rebuild it with `node tools/make-corpus.mjs`: one command, one
+log per session directory (the newest generation, under either spelling), the
+count printed rather than read off `ls`. A hand-built corpus got this wrong twice
+and left 26 files where 553 belonged — green, because 26 is not zero.
 
 A change that alters a number is not done until the tools that assert the old
 numbers have been re-run and the new ones are in the summary. Quote real

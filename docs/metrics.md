@@ -108,10 +108,10 @@ in use.
 
 `llm/retry` records the failure, the backoff the policy chose (`delayMs`), and
 then the next attempt. The time the *failed attempt itself* took is not in
-`delayMs`, and on this history it is usually the larger half: Σ`delayMs` over
-every retried step is 634 s, while the wall time those steps actually burned is
-11 201 s. Quoting the sleep as "retry cost" would understate the real thing by
-about 18x.
+`delayMs`, and over the 553-log corpus of 2026-10-06 it is the smaller half by
+an order of magnitude: Σ`delayMs` over every retried step is 1 237 s, while the
+wall time those steps actually burned is 16 118 s. Quoting the sleep as "retry
+cost" would understate the real thing by 13x.
 
 So the dead time is measured as a difference of two log timestamps:
 
@@ -124,8 +124,8 @@ actually left is dead by construction — the failed attempts plus every backoff
 sleep — and the winning request is excluded, which is what makes
 `ttft_clean = ttft − deadMs` a real time-to-first-token rather than the
 subtraction of two unrelated quantities. Over the corpus the result is never
-negative (0 of 437 recovered retried steps); `node tools/verify-retry.mjs`
-re-asserts that over every session log it can find.
+negative (0 of the 721 recovered retried steps on 2026-10-06);
+`node tools/verify-retry.mjs` re-asserts that over every session log it can find.
 
 Reading the pair is the point. `retry%` says how often the provider made the
 harness try again; `ttft_clean` says what the model did once it was allowed to
@@ -134,24 +134,31 @@ high `retry%` with a low one is a flaky route. Measured here:
 
 | model | steps | retry% | ttft med | ttft clean | recovered | gave up | dominant code |
 |---|---|---|---|---|---|---|---|
-| limitdeckai2/glm-5.3-flash | 648 | 19.6% | 8300 ms | 7953 ms | 97% | 4 | `SERVER` ×229 |
-| limitdeckai2/deepseek-v4-flash | 1670 | 12.1% | 7730 ms | 7620 ms | 96% | 9 | `SERVER` ×296 |
-| tokenator/free-gpt-6-astra | 170 | 5.9% | 17490 ms | 17490 ms | 67% | 5 | `RATE_LIMIT` ×25 |
-| nvidia1/z-ai/glm-5.3-flash | 603 | 5.5% | 97953 ms | 97953 ms | 77% | 10 | `TIMEOUT` ×60 |
-| deepseek-official/deepseek-flash | 9946 | 0.1% | 1933 ms | 1932 ms | 85% | 2 | `TRANSPORT` ×21 |
+| limitdeckai2/deepseek-v4.1-flash | 345 | 17.4% | 8205 ms | 8021 ms | 98% | 1 | `SERVER` ×89 |
+| limitdeckai2/deepseek-v4-flash | 2185 | 11.6% | 7730 ms | 7620 ms | 96% | 11 | `SERVER` ×389 |
+| limitdeckai2/glm-5.3-flash | 1659 | 10.5% | 8795 ms | 8517 ms | 95% | 9 | `SERVER` ×300 |
+| limitdeckai/gpt-5.6-luna | 524 | 2.3% | 10423 ms | 10423 ms | 44% | 15 | `EMPTY_RESPONSE` ×95 |
+| deepseek-official/deepseek-flash | 19571 | 0.2% | 2020 ms | 2019 ms | 75% | 15 | `TRANSPORT` ×154 |
 
-Two different faults, and the codes separate them: `SERVER` storms are a
-provider-side 5xx that the retry heals (94–97% recovery on `limitdeckai2`),
-while `TIMEOUT` is a patience problem and heals worse (75–77%). `nvidia1/z-ai`
-retries rarely enough that the dead time does not move its median at all — its
-97-second first token is the route, not the backoff.
+The codes separate the faults rather than just ranking them: `SERVER` storms are
+a provider-side 5xx that the retry heals (95–98% recovery on `limitdeckai2`),
+while `EMPTY_RESPONSE` is a route that answers with nothing and heals worse — 44%
+on `limitdeckai/gpt-5.6-luna` — and `TRANSPORT` on `deepseek-flash` recovers 75%
+of the time. `nvidia1/z-ai/glm-5.3-flash` retries rarely enough (4.8%) that the
+dead time does not move its median at all: its 94 598 ms first token is the
+route, not the backoff.
 
 A step whose retries never produce a message emits no sample, so it is counted
 separately as `retryFailedSteps`; that is what gives the recovery rate a
 denominator. Its provider is exact (`llm/retry` names it) and its model is
-attributed only when that provider had already spoken in the same session —
-114 of 994 retry events on 26 exhausted steps stay unattributed rather than
-guessed onto a model row.
+attributed only when that provider had already spoken in the same session — on
+the 553-log corpus of 2026-10-06 that leaves 252 of 1 988 retry events, on 56 of
+the 192 exhausted steps, unattributed rather than guessed onto a model row. That
+asymmetry is why the report's two totals are named `retriesKnown` and
+`retryFailedStepsKnown`: they add up the model rows (1 736 events, 136 steps),
+the provider rows beside them count the whole of it (1 988, 192), and
+`node tools/verify-retry.mjs` asserts the difference against the events that
+named no model rather than leaving a reader to notice it.
 
 ## An error count is not a verdict
 
