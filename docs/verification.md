@@ -32,9 +32,11 @@ node/tools/verify-readme-parity.mjs  # README.md and README_ru.md are still one 
 node tools/harness.mjs           # end-to-end drive through the plugin's real apply()
 ```
 
-Counts as they stand on 2026-10-05, twenty green (`exit=0`) over the 347-log corpus.
+Counts as they stand on 2026-10-06, twenty green (`exit=0`) over the 553-log corpus.
 The twenty-first is `verify-liveness.mjs`, which needs real provider keys and was not
-walked today:
+walked today. The column is dated prose rather than a measurement: nothing in those
+tools prints its own total, so two of the rows below are numbers nobody can
+re-derive (`Plans/TECH-DEBT.md`, D-049).
 
 | tool | what it counts | checks |
 |---|---|---|
@@ -85,19 +87,27 @@ guard was checked by removing it and watching the tool go red — without the st
 key's validation one step inherits 500 ms of another step's tool time, which is
 the only shape this plugin considers worse than publishing nothing. The same tool
 also classifies every result that pairs with no open call, because a bare count
-would let a wrong explanation stand: all 454 of them on this history are
+would let a wrong explanation stand: all 583 of them on this history are
 `compaction/prune` re-commits of a call that was already timed — same turn, same
-step, hours later (median gap 12 953 767 ms) and with a shorter body. It asserts
-that each session's prune events match its re-commits one for one, that no result
+step, and with a shorter body — and the tool asserts that each session's prune
+events match its re-commits one for one. It asserts that no result
 names a call the log never recorded, that none answers a call that has not arrived
 yet, and that no re-commit carries an error the first answer already booked. Those
 four are what keep the pairing comment in `lib/fold.js` a claim rather than a
 story: a host that starts dropping real durations fails here instead of
-shortening a published median. The three corpus tools take their path as their
-first argument, defaulting to `/tmp/dshcorpus` (347
+shortening a published median. Since D-046 the same tool also asserts the wait
+split: every span's `waitMs` is inside its own `ms`, every row's work plus its wait
+is the wall time it reports, the per-tool breakdown carries the same wait, the two
+columns are over the same steps, and the corpus carries both halves — so a fold
+that stops recognising the approval pair or the answer envelope fails here instead
+of reporting that nobody ever waited. The three corpus tools take their path as
+their first argument, defaulting to `/tmp/dshcorpus` (553
 sessions here) — a missing corpus is an inability to run, never a pass, and so is
 an empty one: the directory at that default path had been emptied between two
-runs and `verify-retry.mjs` stayed green over nothing until this was checked.
+runs and `verify-retry.mjs` stayed green over nothing until this was checked. It
+was emptied again on 2026-10-06 by a reboot, and rebuilding it from
+`~/.dsh/sessions` (`zstd -dc` per session, highest log version) is what those
+counts above were taken from.
 
 ## The panel test
 

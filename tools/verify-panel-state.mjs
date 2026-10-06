@@ -2902,7 +2902,7 @@ console.log('\n--- сортировка по клику на заголовок 
   // group would take them for one more figure about the step itself.
   check('полный вид группирует однотипные метрики',
     tableHeadings.map((th) => th.props.key).join(',') ===
-      'name,liveness,rating,steps,lastSeen,ttft,ttftP90,ttftClean,retry,e2e,tps,tpsMax,confidence,errorRate,modelErrors,errors,interrupted,llm,prefill,overhead,cache,tools,toolTime')
+      'name,liveness,rating,steps,lastSeen,ttft,ttftP90,ttftClean,retry,e2e,tps,tpsMax,confidence,errorRate,modelErrors,errors,interrupted,llm,prefill,overhead,cache,tools,toolTime,toolWork,toolWait')
   // The count is derived from PANEL_SORTS rather than written down, so adding a
   // column cannot leave a stale literal here that only fails on the next person
   // to run the tool. One heading per sort key, and every heading is one.

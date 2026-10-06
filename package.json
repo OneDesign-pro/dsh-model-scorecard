@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-scorecard",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "A scorecard for every configured (provider, model) route: measured speed and stability folded from DSH session history, a 0-100 technical rating, the on-demand check of whether a route answers right now, and what the adapter declares about itself. Zero runtime dependencies.",

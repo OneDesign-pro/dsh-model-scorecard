@@ -229,7 +229,7 @@ sample stamped as it is pushed would always read zero. Doing it afterwards also
 makes the join independent of that order.
 
 **It does not overlap `llm` or `overhead`, and that is measured, not argued.**
-Every one of the **32 080** paired calls on this history answers *after* the
+Every one of the **46 080** paired calls on this history answers *after* the
 `assistant/message` that closed its step, so the two figures are disjoint by
 construction — the step's LLM span is closed before any of its tools run.
 `tools/verify-tool-timing.mjs` asserts it over the corpus, because a result that
@@ -242,36 +242,63 @@ name and this column would be publishing a second copy of it.
 step that called nothing is a measured `0` and a model whose steps need no help
 reads as zero rather than as missing. `toolMs` is summarised over the steps that
 **did** call something, and a pair with none shows `-`: a median over mostly-zero
-steps is not what a reader is asking for. On this history, over the 40 of 49 rows
-that called anything, the two ranges are 0.50–1.76 calls a step, and 9 ms to
-1 728 ms of median tool time per step.
+steps is not what a reader is asking for. On this history, over the 64 of 75 rows
+that called anything, calls per step run 0.25–1.69, the median tool time per step
+runs 7 ms to 24 806 ms — and the median *work* per step of the same rows runs 5 ms
+to 4 227 ms. That gap is the point of the next section.
 
 ### The number is the tool's, and the breakdown is what makes it readable
 
 This is the part that had to be measured before the column could be designed.
-Total tool time on this history is **128 060 s** over 32 080 calls — mean 3 992 ms,
-median **38 ms**, p90 535 ms, p99 57.6 s, max 7 h. The distribution is not the
-model's; it is the tools the model happened to reach for:
+Total tool time on this history is **263 477 s** over 46 080 calls — mean 5 718 ms,
+median **35 ms**, p90 557 ms, p99 55 338 ms, max 7 h 04 m. The distribution is not
+the model's; it is the tools the model happened to reach for:
 
-| tool | calls | ms/call | total |
-|---|---|---|---|
-| `ask_user_question` | 125 | 519 005 | 64 876 s |
-| `bash` | 15 929 | 2 764 | 44 033 s |
-| `edit` | 5 222 | 1 786 | 9 326 s |
-| `write` | 492 | 6 872 | 3 381 s |
-| `read` | 5 817 | 20 | 115 s |
+| tool | calls | ms/call | total | of it a person |
+|---|---|---|---|---|
+| `ask_user_question` | 190 | 703 163 | 133 601 s | 133 601 s |
+| `bash` | 22 644 | 3 262 | 73 862 s | 24 484 s |
+| `edit` | 7 472 | 5 030 | 37 575 s | 37 403 s |
+| `write` | 753 | 10 513 | 7 916 s | 7 896 s |
+| `read` | 8 795 | 18 | 159 s | — |
 
-`ask_user_question` is **a person thinking**, and it is 76 of the busiest pair's
-20 315 calls and 28 328 s of its 64 922 s. So the column publishes `toolCallsTop`
-beside the median: a row that looks slow can name the tool that made it slow, and
-nothing is silently excluded — a hidden exclusion list would make the column
-mean "time minus the tools I decided to discount", which is a number no reader can
-check.
+`ask_user_question` is **a person thinking**, and D-046 was filed because that was
+written down as a caveat instead of being taken out of the figure. It is now taken
+out, and the arithmetic is a subtraction a reader can perform: `toolWorkMs` is the
+same distribution over the same steps with the wait removed, and `toolWaitSeconds`
+is what was removed, so `toolSeconds = toolWorkSeconds + toolWaitSeconds` holds
+exactly. Over this corpus **204 255 s of the 263 477 s (77.5%) is a person**, in
+500 calls of 46 080 — 1.1% of the calls and three quarters of the time. Fifteen of
+the 64 rows that call anything have over 90% of their tool time in that column,
+and the busiest row of all, `deepseek-flash`, spends 28 956 s of its 68 569 s on
+80 questions and 2 044 s more inside 12 103 `bash` calls waiting to be allowed.
 
-The tail carries the same caveat as `retryDeadMs` (see *What a retry costs*): a
-wall-clock difference includes a suspended machine. `gpt-5.6-luna` has a p90 of
-**284 712 ms** from five `write` calls, which is a sleep and not a tool. Medians
-are what the panel shows and they are unaffected.
+Two identities decide that split, and neither is a list of tool names — the thing
+D-046 refused, because a discount a reader cannot check makes a published figure
+mean "time minus what I decided to ignore":
+
+- **An approval names the call it blocks.** `approval/asked` carries both the
+  approval's `id` and the `callId` of the call it suspends; `approval/decided`
+  carries the `id` and the outcome. The interval between them is filed against
+  that `callId`. On this corpus all 317 intervals with a decision lie inside their
+  call's own span — `asked` at or after the call, `decided` at or before its
+  result — 0 outside, and 319 asked events over 317 distinct ids (two committed
+  twice) are counted once each by id.
+- **An answer to a question is the harness's own envelope.** What a person picked
+  is committed as a JSON object with an `answers` array. 183 of the 190 answers to
+  a question carry it; the other seven are `Error: invalid arguments: "questions"
+  must be an array` results, which is exactly why the test is the envelope and not
+  the tool's name — a question the model got wrong is an error, not thinking time.
+  No result of any other tool in 46 663 carries the envelope at all. The text sits
+  one level deeper in the older logs (`message.content[0].content[0].text`), and
+  missing that nesting would have misread 62 of these 190 answers as work.
+
+`toolMs` is not redefined by any of this: it stays the wall figure, and the
+breakdown in `toolCallsTop` now carries each tool's wait beside its time, so a row
+that looks slow can name the tool that made it slow *and* say how much of that was
+somebody's decision. The suspended-machine caveat above is thinner than it read:
+the 7 h 04 m call is an answer to a question, and the longest span left once the
+waits come out is 687 s — a `subagent`, i.e. real work.
 
 ### What a changed log must not do to this column
 

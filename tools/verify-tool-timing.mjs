@@ -30,6 +30,13 @@
 //      session by session, and is never a call the log forgot to commit — which is
 //      the claim the pairing comment in `lib/fold.js` makes, and the only thing
 //      that keeps it from rotting into a plausible sentence about dropped work.
+//   8. The wait is a part of the span and the split is a subtraction: every
+//      span's `waitMs` is inside its own `ms`, every row's work plus its wait is
+//      the wall time it reports, the per-tool breakdown carries the same wait,
+//      and the two columns are over the same steps. The corpus has both halves,
+//      so a fold that finds none — the identities in `lib/fold.js`, an approval
+//      naming its call and the harness's answer envelope — fails here instead of
+//      quietly reporting that nobody ever waited.
 //
 // A directory of session logs, one JSON event per line, is the input — the
 // same corpus `tools/verify-retry.mjs` reads.
@@ -182,7 +189,7 @@ const failures = []
 
 // 7. Every result that pairs with no open call is a re-commit, and the prune events
 //    of the same session account for it one for one. Without this the pairing
-//    comment in `lib/fold.js` is a story about 454 results; with it, a host that
+//    comment in `lib/fold.js` is a story about 647 results; with it, a host that
 //    begins answering calls it never recorded — or a prune that stops rewriting a
 //    result the fold already timed — fails here instead of shortening a published
 //    median quietly, which is the failure mode this whole tool exists for.
@@ -221,6 +228,13 @@ for (const sample of samples) {
     }
     if (!Number.isFinite(span.ms) || span.ms < 0) {
       failures.push(`a span on the step at ${sample.time} is ${span.ms} ms`)
+    }
+    // A wait that is not a part of its own span would make the work figure
+    // disagree with the wall figure it was subtracted from.
+    if (!Number.isFinite(span.waitMs) || span.waitMs < 0 || span.waitMs > span.ms) {
+      failures.push(
+        `a span on the step at ${sample.time} carries ${span.waitMs} ms of wait inside ${span.ms} ms of call`,
+      )
     }
   }
 }
@@ -276,6 +290,60 @@ for (const row of report.byProvider) {
       `provider ${row.provider}: the roll-up carries ${row.toolCalls} call(s) where its models carry ${summed}`,
     )
   }
+}
+
+// 8. The wait split is a subtraction the reader can check, not a discount to be
+//    trusted. Every row publishes both halves beside the wall total it came from,
+//    and the three have to agree; a wait that grew past the span it belongs to,
+//    or a classifier that stopped recognising one of the two identities, would
+//    otherwise surface as a plausible milliseconds figure and nothing else. The
+//    last check is the one that catches a silent break of the identities
+//    themselves: this corpus has both halves, so a run that finds none, or finds
+//    the wait eating the whole column, is a defect rather than a quiet history.
+let waitSpans = 0
+let waitTotal = 0
+let rawTotal = 0
+for (const sample of samples) {
+  for (const span of sample.toolSpans ?? []) {
+    rawTotal += span.ms
+    if ((span.waitMs ?? 0) > 0) waitSpans += 1
+    waitTotal += span.waitMs ?? 0
+  }
+}
+for (const row of [...report.byModel, ...report.byProvider]) {
+  const label = `${row.provider}/${row.model ?? '(roll-up)'}`
+  if (row.toolCalls === 0) {
+    // No call is no measurement: the two figures are `null` and the panel draws
+    // `-`, exactly as it does for a median over no samples.
+    if (row.toolWorkSeconds !== null || row.toolWaitSeconds !== null) {
+      failures.push(
+        `${label}: a row with no tool call reports ${row.toolWorkSeconds} s of work and ${row.toolWaitSeconds} s of wait`,
+      )
+    }
+    continue
+  }
+  const split = (row.toolWorkSeconds ?? 0) + (row.toolWaitSeconds ?? 0)
+  if (Math.abs(split - row.toolSeconds) > 1e-6) {
+    failures.push(
+      `${label}: work ${row.toolWorkSeconds} s + wait ${row.toolWaitSeconds} s is not the ${row.toolSeconds} s of wall time it reports`,
+    )
+  }
+  const topWait = row.toolCallsTop.reduce((sum, entry) => sum + (entry.waitMs ?? 0), 0)
+  if (Math.abs(topWait / 1000 - (row.toolWaitSeconds ?? 0)) > 1e-6) {
+    failures.push(
+      `${label}: the breakdown carries ${topWait / 1000} s of wait where the row carries ${row.toolWaitSeconds} s`,
+    )
+  }
+  if (row.toolWorkMs.count !== row.toolMs.count) {
+    failures.push(
+      `${label}: ${row.toolWorkMs.count} work sample(s) against ${row.toolMs.count} wall sample(s) — the two columns are not over the same steps`,
+    )
+  }
+}
+if (rawTotal > 0 && (waitTotal <= 0 || waitTotal >= rawTotal)) {
+  failures.push(
+    `the corpus carries ${(waitTotal / 1000).toFixed(0)} s of wait inside ${(rawTotal / 1000).toFixed(0)} s of tool time: one of the two identities stopped being recognised`,
+  )
 }
 
 // 6. What a Harness update must not do. The plugin never asks the Harness to
@@ -399,6 +467,10 @@ console.log(
   `compaction/prune events ${pruneEvents}, sessions where they do not match the re-commits ${pruneMismatches.length}, re-commits carrying an error ${errorsOnReCommits}`,
 )
 console.log(`negative durations in the log ${negativeInLog}`)
+console.log(
+  `spans carrying a wait ${waitSpans} of ${spans}: ${(waitTotal / 1000).toFixed(0)} s of a person, ` +
+    `${((rawTotal - waitTotal) / 1000).toFixed(0)} s of work`,
+)
 console.log(`pairs on a step that answered ${pairsOnAnsweredStep}, on one that did not ${callsOnUnansweredStep}`)
 console.log(`pairs landing before their step's assistant/message ${pairsBeforeMessage}`)
 console.log('')

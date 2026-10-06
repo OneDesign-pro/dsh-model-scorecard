@@ -58,15 +58,20 @@ columns stay one click away under «все метрики». Errors per 100 step
 activity, not task difficulty or blame, and neither they nor the rating measure
 answer quality.
 
-**The two tool columns are a group of their own**, at the end of the table and
+**The four tool columns are a group of their own**, at the end of the table and
 after a divider: `llm`, `prefill` and `overhead` describe the *inside* of one
-step, while `tools/step` and `tool time/step` describe the loop between steps.
-Filing them under the same rule would read as one more per-step figure, and the
-number under them is a tool's time rather than the model's — which is what their
-tooltips say, and what `docs/metrics.md` argues. They open in the directions the
-host does (`tools` busiest first, like `steps`; `tool time/step` least first,
-like `overhead`), because a click that opened the opposite way from every other
-heading is what the shared `SORT_DIRS` map exists to prevent.
+step, while `tools/step`, `tool time/step`, `tool work/step` and `wait` describe
+the loop between steps. Filing them under the same rule would read as one more
+per-step figure, and the number under them is a tool's time rather than the
+model's — which is what their tooltips say, and what `docs/metrics.md` argues.
+`tool work/step` is the same step figure with the part a person spent taken out
+and `wait` is that part as a total, both of them beside the wall column rather
+than folded into it (D-046). They open in the directions the
+host does (`tools` busiest first, like `steps`; `tool time/step` and
+`tool work/step` least first, like `overhead`; `wait` largest first, because its
+question is who is waiting on the reader), because a click that opened the
+opposite way from every other heading is what the shared `SORT_DIRS` map exists to
+prevent.
 
 ### The rating cell
 

@@ -54,6 +54,8 @@ window.__ModuleLoader__.load({
       overhead: 'asc',
       tools: 'desc',
       toolTime: 'asc',
+      toolWork: 'asc',
+      toolWait: 'desc',
       errorRate: 'desc',
       modelErrors: 'desc',
       interrupted: 'desc',
@@ -160,6 +162,8 @@ window.__ModuleLoader__.load({
         'column.overhead': 'наш оверхед',
         'column.tools': 'инстр./шаг',
         'column.toolTime': 'инстр. с/шаг',
+        'column.toolWork': 'инстр. работа/шаг',
+        'column.toolWait': 'ожидание, с',
         'column.lastSeen': 'виден',
         'column.liveness': 'статус',
         'column.rating': 'рейтинг',
@@ -241,7 +245,11 @@ window.__ModuleLoader__.load({
         'hint.tools':
           'Сколько вызовов инструментов приходится на один шаг этой модели. Считается по всем её шагам, поэтому шаг, где инструмент не вызывался, — честный ноль, а не пробел: сравниваются модели целиком, а не только те шаги, где инструмент понадобился. Это объём работы, а не качество: больше вызовов не значит лучше. Считаются только те вызовы, которые вернули результат; вызов, на который ответа не было, не попадает ни в одну цифру колонки. «-» означает, что у модели нет ни одного шага.',
         'hint.toolTime':
-          'Медиана того, сколько времени ждал один шаг этой модели, пока выполнялись вызванные им инструменты: от `tool/call` до `tool/result`. Это время инструмента, а не модели — здесь лежит и работа песочницы (`bash` — около 2,8 с на вызов), и ожидание человека (`ask_user_question` — сотни секунд на вызов). Сами миллисекунды модели ничего не говорят: колонка нужна, чтобы увидеть, сколько всего цикл агента тратит между двумя вызовами модели, и разбивка по инструментам отдаётся в ответе панели. Время инструментов не входит во «наш оверхед» и во время шага: лог закрывает шаг сообщением модели, а ответ инструмента приходит после. Медиана берётся только по шагам, где инструмент вызывался, поэтому у модели, чьи шаги обходятся без него, стоит «-», а не 0 мс.',
+          'Медиана того, сколько времени ждал один шаг этой модели, пока выполнялись вызванные им инструменты: от `tool/call` до `tool/result`. Это время инструмента, а не модели — здесь лежит и работа песочницы (`bash` — около 3,3 с на вызов по корпусу из 553 логов), и ожидание человека (`ask_user_question` — около 700 с на вызов). Сами миллисекунды модели ничего не говорят: колонка нужна, чтобы увидеть, сколько всего цикл агента тратит между двумя вызовами модели, и разбивка по инструментам отдаётся в ответе панели. Время инструментов не входит во «наш оверхед» и во время шага: лог закрывает шаг сообщением модели, а ответ инструмента приходит после. Медиана берётся только по шагам, где инструмент вызывался, поэтому у модели, чьи шаги обходятся без него, стоит «-», а не 0 мс.',
+        'hint.toolWork':
+          'То же время по тем же шагам, но без той части, про которую лог прямо говорит, что её провёл человек: разрешение на опасную команду (`approval/asked` → `approval/decided`, склеенные по `callId`) и ответ на вопрос (конверт `{"answers":[…]}` в ответе инструмента). По корпусу из 553 логов из 263 477 с общего времени инструментов 204 255 с (77,5%) — человек, и только 59 223 с — работа; из них `bash` даёт 49 378 с. Колонка «инстр. с/шаг» при этом не переопределяется и остаётся стенным временем: `toolSeconds = toolWorkSeconds + toolWaitSeconds` сходится точно, поэтому скидку читатель может проверить сам, а не верить ей. Отличие от «инстр. с/шаг» и есть ожидание человека в этой строке.',
+        'hint.toolWait':
+          'Сколько всего секунд внутри вызовов этой модели ушло на человека, а не на инструмент: ожидание разрешения песочницы плюс ответы на вопросы. По корпусу из 553 логов это 500 вызовов из 46 080 (1,1%), но 77,5% всего времени инструментов. Для отдельной строки это ответ на вопрос «сколько эта модель ждёт меня», поэтому сортировка по колонке — по убыванию. Наибольшие строки здесь — не самые медленные модели: `edit` с 79 разрешениями держит 37 403 с, `bash` со 140 разрешениями — 24 484 с, и обе цифры не про песочницу, а про то, как долго кто-то решал.',
         'hint.lastSeen': 'Когда модель отвечала в последний раз — по всем сессиям в истории.',
         // The rating is the one column whose figure is a verdict rather than a
         // reading, so its heading carries the whole rule: what is counted, what is
@@ -403,6 +411,8 @@ window.__ModuleLoader__.load({
         'column.overhead': 'our overhead',
         'column.tools': 'tools/step',
         'column.toolTime': 'tool time/step',
+        'column.toolWork': 'tool work/step',
+        'column.toolWait': 'wait, s',
         'column.lastSeen': 'seen',
         'column.liveness': 'status',
         'column.rating': 'rating',
@@ -477,7 +487,11 @@ window.__ModuleLoader__.load({
         'hint.tools':
           'Tool calls per step of this model, counted over every step it took — so a step that called nothing is a measured zero rather than missing data, and models are compared whole rather than only over the steps that happened to need a tool. This is how much loop the work involves, not how good it is: more calls is not better. Only calls that came back are counted; a call with no result is in no figure of this column. A “-” means the model has no steps at all.',
         'hint.toolTime':
-          'Median wall time one step of this model spent waiting for the tools it called, from `tool/call` to `tool/result`. It is the tool’s time and not the model’s: the sandbox running a command (bash, ~2.8 s a call on this history) and a person answering a question (ask_user_question, hundreds of seconds a call) are both in it, which is why the milliseconds alone say nothing about the model. The column is here to show what the agent loop spends between two model calls, and the per-tool breakdown travels with the row in the panel’s answer. Tool time is not part of our overhead or of the step’s own duration: the log closes the step at the model’s message and the tool answers after it. The median is over the steps that did call a tool, so a model whose steps need none shows “-” rather than 0 ms.',
+          'Median wall time one step of this model spent waiting for the tools it called, from `tool/call` to `tool/result`. It is the tool’s time and not the model’s: the sandbox running a command (bash, ~3.3 s a call over the 553-log corpus) and a person answering a question (ask_user_question, ~700 s a call) are both in it, which is why the milliseconds alone say nothing about the model. The column is here to show what the agent loop spends between two model calls, and the per-tool breakdown travels with the row in the panel’s answer. Tool time is not part of our overhead or of the step’s own duration: the log closes the step at the model’s message and the tool answers after it. The median is over the steps that did call a tool, so a model whose steps need none shows “-” rather than 0 ms.',
+        'hint.toolWork':
+          'The same time over the same steps, minus the part the log says a person spent: allowing a dangerous command (`approval/asked` → `approval/decided`, joined by `callId`) and answering a question (the `{"answers":[…]}` envelope in a tool result). Over the 553-log corpus, 204 255 s of the 263 477 s of tool wall time is a person (77.5%) and 59 223 s is work, of which `bash` contributes 49 378 s. “tool time/step” is not redefined by this and stays wall time: `toolSeconds = toolWorkSeconds + toolWaitSeconds` holds exactly, so the discount is a figure a reader can check rather than one to be trusted. The gap between this column and “tool time/step” is the wait in that row.',
+        'hint.toolWait':
+          'How many seconds inside this model’s calls went to a person rather than to a tool: waiting for the sandbox to be allowed, plus answers to questions. Over the 553-log corpus that is 500 calls of 46 080 (1.1%) and 77.5% of all tool wall time. For one row it answers “how long is this model waiting on me”, so the column sorts descending. Its largest rows are not the slowest models: `edit` with 79 approvals holds 37 403 s and `bash` with 140 holds 24 484 s, and neither figure is about the sandbox — both are about how long somebody took to decide.',
         'hint.lastSeen': 'When the model last answered, across every session in the history.',
         'hint.rating':
           'Technical rating of this provider–model pair, 0–100. It weighs generation speed, typical response and slow response. All history, with a measurement’s weight halved every 30 days against the newest usable one. Retried and interrupted steps are excluded. It does not judge intelligence, availability, price or context size. A rating is published from 10 qualified measurements and marked “~” while the effective sample or the session count is small, and “*” when the newest usable measurement is over 30 days old: the score stays historical and is never recomputed from its age. “-” means there is no rating — hover the figure to read why.',
@@ -1970,6 +1984,27 @@ window.__ModuleLoader__.load({
         hintKey: 'hint.toolTime',
         cell: (row, ctx) => ctx.fmt.ms(row.toolMsMedian),
       },
+      // The same column with the person taken out, and the wait itself beside it.
+      // Both are here rather than folded into `toolTime` because a reader can then
+      // check the subtraction instead of trusting it — and because a route whose
+      // tool time is one long answer to a question is not a route with a slow
+      // sandbox, which is the reading the raw column invites.
+      {
+        key: 'toolWork',
+        base: 'num',
+        sort: 'toolWork',
+        labelKey: 'column.toolWork',
+        hintKey: 'hint.toolWork',
+        cell: (row, ctx) => ctx.fmt.ms(row.toolWorkMsMedian),
+      },
+      {
+        key: 'toolWait',
+        base: 'num',
+        sort: 'toolWait',
+        labelKey: 'column.toolWait',
+        hintKey: 'hint.toolWait',
+        cell: (row, ctx) => ctx.fmt.count(row.toolWaitSeconds),
+      },
       // The panel can sort by recency, so the timestamp it sorts by is a column
       // of its own instead of an invisible key.
       {
@@ -1991,7 +2026,7 @@ window.__ModuleLoader__.load({
       ['e2e', 'tps', 'tpsMax', 'confidence'],
       ['errorRate', 'modelErrors', 'errors', 'interrupted'],
       ['llm', 'prefill', 'overhead', 'cache'],
-      ['tools', 'toolTime'],
+      ['tools', 'toolTime', 'toolWork', 'toolWait'],
     ]
     // The compact set: identity, the two columns a reader acts on, and the four
     // figures a decision is made from. It is seven columns wide — it was six
